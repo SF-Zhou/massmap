@@ -28,24 +28,24 @@ massmap = "0.1"
 use massmap::{MassMap, MassMapBuilder};
 
 fn main() -> std::io::Result<()> {
-	let entries = [
-		("apple".to_string(), 1u32),
-		("banana".to_string(), 2u32),
-		("cherry".to_string(), 3u32),
-	];
+    let entries = [
+        ("apple".to_string(), 1u32),
+        ("banana".to_string(), 2u32),
+        ("cherry".to_string(), 3u32),
+    ];
 
-	// Offline build step.
-	let file = std::fs::File::create("fruits.massmap")?;
-	MassMapBuilder::default()
-		.with_hash_seed(42)
-		.with_bucket_count(1024)
-		.build(file, entries.iter())?;
+    // Offline build step.
+    let file = std::fs::File::create("fruits.massmap")?;
+    MassMapBuilder::default()
+        .with_hash_seed(42)
+        .with_bucket_count(1024)
+        .build(file, entries.iter())?;
 
-	// Read-only lookup phase.
-	let file = std::fs::File::open("fruits.massmap")?;
-	let map = MassMap::<String, u32, _>::load(file)?;
-	assert_eq!(map.get("banana")?, Some(2));
-	Ok(())
+    // Read-only lookup phase.
+    let file = std::fs::File::open("fruits.massmap")?;
+    let map = MassMap::<String, u32, _>::load(file)?;
+    assert_eq!(map.get("banana")?, Some(2));
+    Ok(())
 }
 ```
 
