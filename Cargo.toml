@@ -1,6 +1,6 @@
 [package]
 name = "massmap"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["SF-Zhou <sfzhou.scut@gmail.com>"]
 homepage = "https://github.com/SF-Zhou/massmap"

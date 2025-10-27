@@ -52,11 +52,11 @@ impl<T: std::os::windows::fs::FileExt> MassMapReader for T {
         F: Fn(&[u8]) -> Result<R>,
     {
         let mut buffer = vec![0u8; length as usize];
-        let bytes = self.seek_read(&mut buffer, offset)?;
-        if bytes.len() != buffer.len() {
+        let n = self.seek_read(&mut buffer, offset)?;
+        if n != buffer.len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                "Failed to read enough bytes",
+                format!("Failed to read enough bytes: {} < {}", n, buffer.len()),
             ));
         }
         f(&buffer)

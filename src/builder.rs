@@ -176,7 +176,7 @@ impl MassMapBuilder {
         data[..S].copy_from_slice(&MAGIC_NUMBER.to_be_bytes());
         data[S..S * 2].copy_from_slice(&meta_offset.to_be_bytes());
         data[S * 2..].copy_from_slice(&meta_length.to_be_bytes());
-        writer.write_at(&data, 0)?;
+        writer.write_all_at(&data, 0)?;
 
         let empty_buckets = meta.buckets.iter().filter(|b| b.count == 0).count();
         Ok(MassMapInfo {
@@ -204,7 +204,7 @@ pub struct MassMapWriterWrapper<'a, W: MassMapWriter> {
 impl<'a, W: MassMapWriter> std::io::Write for MassMapWriterWrapper<'a, W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let offset = self.offset.fetch_add(buf.len() as u64, Ordering::Relaxed);
-        self.inner.write_at(buf, offset)?;
+        self.inner.write_all_at(buf, offset)?;
         Ok(buf.len())
     }
 
