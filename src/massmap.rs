@@ -177,8 +177,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::FileExt;
-
     use crate::*;
 
     #[test]

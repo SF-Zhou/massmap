@@ -7,20 +7,26 @@ use std::io::Result;
 /// and Windows.
 pub trait MassMapWriter {
     /// Writes `data` at the given absolute `offset`.
-    fn write_at(&self, data: &[u8], offset: u64) -> Result<()>;
+    fn write_all_at(&self, data: &[u8], offset: u64) -> Result<()>;
 }
 
 #[cfg(unix)]
 impl<T: std::os::unix::fs::FileExt> MassMapWriter for T {
-    fn write_at(&self, data: &[u8], offset: u64) -> Result<()> {
+    fn write_all_at(&self, data: &[u8], offset: u64) -> Result<()> {
         self.write_all_at(data, offset)
     }
 }
 
 #[cfg(windows)]
 impl<T: std::os::windows::fs::FileExt> MassMapWriter for T {
-    fn write_at(&self, data: &[u8], offset: u64) -> Result<()> {
-        self.seek_write(data, offset)?;
+    fn write_all_at(&self, data: &[u8], offset: u64) -> Result<()> {
+        let n = self.seek_write(data, offset)?;
+        if n != data.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                format!("Failed to write all bytes: {} < {}", n, data.len()),
+            ));
+        }
         Ok(())
     }
 }
