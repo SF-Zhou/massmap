@@ -1,0 +1,63 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+
+    - name: Run sccache-cache
+      uses: mozilla-actions/sccache-action@v0.0.9
+
+    - name: Install llvm-tools
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: llvm-tools-preview
+
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov,cargo-nextest
+
+    - name: Run tests
+      run: |
+        cargo fmt -- --check
+        cargo clippy --release -- -D warnings
+        cargo llvm-cov --version && cargo nextest --version
+        cargo llvm-cov nextest
+        cargo llvm-cov report --cobertura --output-path target/llvm-cov-target/cobertura.xml
+
+    - name: Run CLI
+      run: |
+        cargo run --release --example massmap -- convert -i examples/demo.json -o examples/demo.massmap --bucket-count 32
+        cargo run --release --example massmap -- info examples/demo.massmap --key 1978 | grep "1978: Some(Number(385))"
+        cargo run --release --example massmap -- info examples/demo.massmap --key 1949 | grep "1949: None"
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: SF-Zhou/massmap
+        files: target/llvm-cov-target/cobertura.xml
+
+    - name: Upload test results to Codecov
+      uses: codecov/test-results-action@v1
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: SF-Zhou/massmap
+        files: target/nextest/default/junit.xml
