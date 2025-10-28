@@ -598,6 +598,9 @@ mod tests {
                 break;
             }
         }
-        assert!(found_error, "Iterator should return an error when reading a corrupted bucket");
+        assert!(
+            found_error,
+            "Iterator should return an error when reading a corrupted bucket"
+        );
     }
 }
