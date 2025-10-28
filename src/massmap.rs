@@ -578,8 +578,8 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let map = MassMap::<u64, u64, _>::load(file).unwrap();
 
-        for bucket in map.meta.buckets.iter().skip(1) {
-            if bucket.count > 0 {
+        for bucket in &map.meta.buckets {
+            if bucket.offset != 24 && bucket.count > 0 {
                 // Corrupt the first non-empty bucket
                 let file = std::fs::OpenOptions::new()
                     .read(true)
