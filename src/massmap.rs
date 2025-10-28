@@ -565,4 +565,39 @@ mod tests {
             .unwrap();
         assert_eq!(skip_take.len(), 5);
     }
+
+    #[test]
+    fn test_iterator_invalid_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("massmap_iter_invalid.bin");
+        let writer = std::fs::File::create(&path).unwrap();
+        let entries = (0..100).map(|i| (i, i));
+
+        let builder = MassMapBuilder::default()
+            .with_bucket_count(10)
+            .with_writer_buffer_size(8 << 20);
+        builder.build(&writer, entries).unwrap();
+
+        // Corrupt bucket data by writing invalid data at offset 24 (start of bucket data)
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.write_all_at(b"invalid data", 24).unwrap();
+
+        // Open the corrupted file and try to iterate
+        let file = std::fs::File::open(&path).unwrap();
+        let map = MassMap::<u64, u64, _>::load(file).unwrap();
+
+        // The iterator should return an error when it tries to read the corrupted bucket
+        let mut found_error = false;
+        for result in map.iter() {
+            if result.is_err() {
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "Iterator should return an error when reading a corrupted bucket");
+    }
 }
