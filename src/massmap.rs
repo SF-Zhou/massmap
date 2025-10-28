@@ -195,8 +195,7 @@ where
         MassMapIter {
             map: self,
             bucket_index: 0,
-            current_entries: Vec::new(),
-            entry_index: 0,
+            current_entries: Vec::new().into_iter(),
         }
     }
 
@@ -216,23 +215,20 @@ where
 pub struct MassMapIter<'a, K, V, R: MassMapReader> {
     map: &'a MassMap<K, V, R>,
     bucket_index: usize,
-    current_entries: Vec<(K, V)>,
-    entry_index: usize,
+    current_entries: std::vec::IntoIter<(K, V)>,
 }
 
 impl<'a, K, V, R: MassMapReader> Iterator for MassMapIter<'a, K, V, R>
 where
-    K: for<'de> Deserialize<'de> + Eq + Hash + Clone,
-    V: for<'de> Deserialize<'de> + Clone,
+    K: for<'de> Deserialize<'de> + Eq + Hash,
+    V: for<'de> Deserialize<'de>,
 {
     type Item = Result<(K, V)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             // If we have entries in the current bucket, yield the next one
-            if self.entry_index < self.current_entries.len() {
-                let entry = self.current_entries[self.entry_index].clone();
-                self.entry_index += 1;
+            if let Some(entry) = self.current_entries.next() {
                 return Some(Ok(entry));
             }
 
@@ -264,8 +260,8 @@ where
 
             match result {
                 Ok(entries) => {
-                    self.current_entries = entries;
-                    self.entry_index = 0;
+                    let vec: Vec<(K, V)> = entries;
+                    self.current_entries = vec.into_iter();
                 }
                 Err(e) => return Some(Err(e)),
             }
