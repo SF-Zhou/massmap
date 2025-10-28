@@ -1,4 +1,4 @@
-use std::io::Result;
+use std::{borrow::Borrow, io::Result};
 
 /// Trait abstracting read access to massmap files.
 ///
@@ -16,16 +16,20 @@ pub trait MassMapReader {
     /// Reads multiple ranges in sequence, delegating to [`read_exact_at`](Self::read_exact_at).
     ///
     /// Override this method to take advantage of vectored IO when available.
-    fn batch_read_at<F, R>(&self, iov: &[(u64, u64)], f: F) -> Result<Vec<R>>
+    fn batch_read_at<Q: ?Sized, F, R>(
+        &self,
+        iov: impl IntoIterator<Item = (impl Borrow<Q>, u64, u64)>,
+        f: F,
+    ) -> Result<Vec<R>>
     where
-        F: Fn(usize, &[u8]) -> Result<R>,
+        F: Fn(&Q, &[u8]) -> Result<R>,
     {
-        let mut results = Vec::with_capacity(iov.len());
-        for (index, &(offset, length)) in iov.iter().enumerate() {
+        let mut results = vec![];
+        for (key, offset, length) in iov {
             if length == 0 {
-                results.push(f(index, &[])?);
+                results.push(f(key.borrow(), &[])?);
             } else {
-                let result = self.read_exact_at(offset, length, |data| f(index, data))?;
+                let result = self.read_exact_at(offset, length, |data| f(key.borrow(), data))?;
                 results.push(result);
             }
         }

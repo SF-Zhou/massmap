@@ -43,6 +43,7 @@ jobs:
         cargo clippy --release -- -D warnings
         cargo llvm-cov --version && cargo nextest --version
         cargo llvm-cov nextest
+        cargo test --doc
         cargo llvm-cov report --cobertura --output-path target/llvm-cov-target/cobertura.xml
 
     - name: Run CLI

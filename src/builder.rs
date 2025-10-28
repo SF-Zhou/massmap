@@ -92,7 +92,7 @@ impl MassMapBuilder {
     /// # fn main() -> std::io::Result<()> {
     /// let data = [("it", 1u32), ("works", 2u32)];
     /// let file = std::fs::File::create("examples/example.massmap")?;
-    /// let info = MassMapBuilder::default().build(file, data.iter())?;
+    /// let info = MassMapBuilder::default().build(&file, data.iter())?;
     /// assert_eq!(info.entry_count, 2);
     /// # Ok(())
     /// # }

@@ -100,7 +100,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        let index = self.build_index(k);
+        let index = self.bucket_index(k);
         let bucket = &self.meta.buckets[index];
         if bucket.count == 0 {
             return Ok(None);
@@ -133,19 +133,21 @@ where
     /// # Errors
     ///
     /// Returns an error under the same conditions as [`get`](Self::get).
-    pub fn batch_get<Q>(&self, keys: &[&Q]) -> Result<Vec<Option<V>>>
+    pub fn batch_get<Q>(
+        &self,
+        keys: impl IntoIterator<Item = impl Borrow<Q>>,
+    ) -> Result<Vec<Option<V>>>
     where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        let mut iov = Vec::with_capacity(keys.len());
-        for &k in keys {
-            let index = self.build_index(k);
+        let iov = keys.into_iter().map(|key| {
+            let index = self.bucket_index(key.borrow());
             let bucket = &self.meta.buckets[index];
-            iov.push((bucket.offset, bucket.length as u64));
-        }
+            (key, bucket.offset, bucket.length as u64)
+        });
 
-        self.reader.batch_read_at(&iov, |index, data| {
+        self.reader.batch_read_at(iov, |expected, data| {
             if data.is_empty() {
                 return Ok(None);
             }
@@ -158,7 +160,7 @@ where
             })?;
 
             for (key, value) in entries.iter() {
-                if key.borrow() == keys[index] {
+                if key.borrow() == expected.borrow() {
                     return Ok(Some(value.clone()));
                 }
             }
@@ -166,7 +168,7 @@ where
         })
     }
 
-    fn build_index<Q>(&self, k: &Q) -> usize
+    fn bucket_index<Q>(&self, k: &Q) -> usize
     where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
@@ -212,7 +214,11 @@ mod tests {
         assert_eq!(map.get("gate").unwrap(), None);
 
         let keys = vec!["cherry", "date", "fig", "elderberry", "steins", "gate"];
-        let results = map.batch_get(&keys).unwrap();
+        let results = map.batch_get::<str>(keys).unwrap();
+        assert_eq!(results, vec![Some(3), Some(4), None, Some(5), None, None]);
+
+        let keys = ["cherry", "date", "fig", "elderberry", "steins", "gate"].map(|s| s.to_string());
+        let results = map.batch_get::<String>(&keys).unwrap();
         assert_eq!(results, vec![Some(3), Some(4), None, Some(5), None, None]);
     }
 
@@ -277,7 +283,7 @@ mod tests {
             let file = std::fs::File::open(&path).unwrap();
             let map = MassMap::<u64, u64, _>::load(file).unwrap();
             map.get(&0).unwrap_err();
-            map.batch_get(&[&0]).unwrap_err();
+            map.batch_get([0]).unwrap_err();
         }
 
         {

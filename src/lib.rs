@@ -19,7 +19,7 @@
 //!     ("banana".to_string(), 2u32),
 //! ];
 //! let file = std::fs::File::create("examples/fruits.massmap")?;
-//! MassMapBuilder::default().build(file, entries.iter())?;
+//! MassMapBuilder::default().build(&file, entries.iter())?;
 //!
 //! let file = std::fs::File::open("examples/fruits.massmap")?;
 //! let map = MassMap::<String, u32, _>::load(file)?;
