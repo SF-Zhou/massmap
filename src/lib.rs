@@ -39,7 +39,7 @@ mod writer;
 pub use writer::MassMapWriter;
 
 mod massmap;
-pub use massmap::MassMap;
+pub use massmap::{MassMap, MassMapIter};
 
 mod builder;
 pub use builder::MassMapBuilder;

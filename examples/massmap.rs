@@ -43,6 +43,10 @@ struct InfoArgs {
     /// Optional key to look up in the massmap
     #[arg(short, long)]
     key: Option<String>,
+
+    /// Optional bucket index to inspect
+    #[arg(short, long)]
+    bucket: Option<u64>,
 }
 
 #[derive(clap::Args)]
@@ -92,6 +96,23 @@ fn run_info(args: InfoArgs) -> Result<()> {
 
     if let Some(key) = args.key {
         println!("{}: {:?}", key, map.get(&key)?);
+    }
+
+    if let Some(bucket_index) = args.bucket {
+        if bucket_index as usize >= meta.buckets.len() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "Bucket index {} out of range >= {}",
+                    bucket_index,
+                    meta.buckets.len()
+                ),
+            ));
+        }
+        let entries = map.get_bucket(bucket_index as usize)?;
+        let json = serde_json::to_string_pretty(&entries)
+            .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
+        println!("Bucket {} entries:\n{}", bucket_index, json);
     }
 
     Ok(())
