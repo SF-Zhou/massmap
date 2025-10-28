@@ -101,27 +101,13 @@ where
         Q: Eq + Hash + ?Sized,
     {
         let index = self.bucket_index(k);
-        let bucket = &self.meta.buckets[index];
-        if bucket.count == 0 {
-            return Ok(None);
+        let entries = self.get_bucket(index)?;
+        for (key, value) in entries.iter() {
+            if key.borrow() == k {
+                return Ok(Some(value.clone()));
+            }
         }
-
-        self.reader
-            .read_exact_at(bucket.offset, bucket.length as u64, |data| {
-                let entries: Vec<(K, V)> = rmp_serde::from_slice(data).map_err(|e| {
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        format!("Failed to deserialize bucket entries: {}", e),
-                    )
-                })?;
-
-                for (key, value) in entries.iter() {
-                    if key.borrow() == k {
-                        return Ok(Some(value.clone()));
-                    }
-                }
-                Ok(None)
-            })
+        Ok(None)
     }
 
     /// Performs multiple lookups in a single pass.
@@ -199,6 +185,32 @@ where
         }
     }
 
+    /// Retrieves all entries in the specified bucket.
+    ///
+    /// This method is primarily intended for testing and debugging.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the reader fails to provide the bucket or if the
+    /// serialized data cannot be deserialized into `(K, V)` pairs.
+    pub fn get_bucket(&self, index: usize) -> Result<Vec<(K, V)>> {
+        let bucket = &self.meta.buckets[index];
+        if bucket.count == 0 {
+            return Ok(Vec::new());
+        }
+
+        self.reader
+            .read_exact_at(bucket.offset, bucket.length as u64, |data| {
+                let entries: Vec<(K, V)> = rmp_serde::from_slice(data).map_err(|e| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Failed to deserialize bucket entries: {}", e),
+                    )
+                })?;
+                Ok(entries)
+            })
+    }
+
     fn bucket_index<Q>(&self, k: &Q) -> usize
     where
         K: Borrow<Q>,
@@ -221,7 +233,7 @@ pub struct MassMapIter<'a, K, V, R: MassMapReader> {
 impl<'a, K, V, R: MassMapReader> Iterator for MassMapIter<'a, K, V, R>
 where
     K: for<'de> Deserialize<'de> + Eq + Hash,
-    V: for<'de> Deserialize<'de>,
+    V: for<'de> Deserialize<'de> + Clone,
 {
     type Item = Result<(K, V)>;
 
@@ -237,26 +249,9 @@ where
                 return None;
             }
 
-            let bucket = &self.map.meta.buckets[self.bucket_index];
-            self.bucket_index += 1;
-
-            // Skip empty buckets
-            if bucket.count == 0 {
-                continue;
-            }
-
             // Read and deserialize the bucket
-            let result =
-                self.map
-                    .reader
-                    .read_exact_at(bucket.offset, bucket.length as u64, |data| {
-                        rmp_serde::from_slice(data).map_err(|e| {
-                            Error::new(
-                                ErrorKind::InvalidData,
-                                format!("Failed to deserialize bucket entries: {}", e),
-                            )
-                        })
-                    });
+            let result = self.map.get_bucket(self.bucket_index);
+            self.bucket_index += 1;
 
             match result {
                 Ok(entries) => {
