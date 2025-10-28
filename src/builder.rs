@@ -99,7 +99,7 @@ impl MassMapBuilder {
     /// ```
     pub fn build<W, K, V>(
         self,
-        writer: W,
+        writer: &W,
         entries: impl Iterator<Item = impl std::borrow::Borrow<(K, V)>>,
     ) -> std::io::Result<MassMapInfo>
     where
@@ -127,7 +127,7 @@ impl MassMapBuilder {
         let mut buf_writer = BufWriter::with_capacity(
             self.writer_buffer_size,
             MassMapWriterWrapper {
-                inner: &writer,
+                inner: writer,
                 offset: &offset,
             },
         );
@@ -210,5 +210,107 @@ impl<'a, W: MassMapWriter> std::io::Write for MassMapWriterWrapper<'a, W> {
 
     fn flush(&mut self) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    #[derive(Debug)]
+    struct MemoryWriter {
+        data: std::sync::Mutex<Vec<u8>>,
+        limit: u64,
+    }
+
+    impl MemoryWriter {
+        fn new(limit: u64) -> Self {
+            Self {
+                data: std::sync::Mutex::new(Vec::new()),
+                limit,
+            }
+        }
+
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+            let data = self.data.lock().unwrap();
+            let available = data.len() - std::cmp::min(offset as usize, data.len());
+            let to_read = std::cmp::min(buf.len(), available);
+            buf[..to_read].copy_from_slice(&data[offset as usize..offset as usize + to_read]);
+            Ok(to_read)
+        }
+    }
+
+    #[cfg(unix)]
+    impl std::os::unix::fs::FileExt for MemoryWriter {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+            self.read_at(buf, offset)
+        }
+        fn write_at(&self, mut buf: &[u8], offset: u64) -> std::io::Result<usize> {
+            if offset > self.limit {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "Write exceeds limit",
+                ));
+            }
+            if buf.len() as u64 + offset > self.limit {
+                buf = &buf[..(self.limit - offset) as usize];
+            }
+
+            let mut data = self.data.lock().unwrap();
+            if data.len() < (offset as usize + buf.len()) {
+                data.resize(offset as usize + buf.len(), 0);
+            }
+            data[offset as usize..offset as usize + buf.len()].copy_from_slice(buf);
+            Ok(buf.len())
+        }
+    }
+
+    #[cfg(windows)]
+    impl std::os::windows::fs::FileExt for MemoryWriter {
+        fn seek_read(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+            self.read_at(buf, offset)
+        }
+        fn seek_write(&self, mut buf: &[u8], offset: u64) -> std::io::Result<usize> {
+            if offset > self.limit {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "Write exceeds limit",
+                ));
+            }
+            if buf.len() as u64 + offset > self.limit {
+                buf = &buf[..(self.limit - offset) as usize];
+            }
+
+            let mut data = self.data.lock().unwrap();
+            if data.len() < (offset as usize + buf.len()) {
+                data.resize(offset as usize + buf.len(), 0);
+            }
+            data[offset as usize..offset as usize + buf.len()].copy_from_slice(buf);
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn test_shorter_write() {
+        // 6400 is sufficient to write all entries, 6000 is not.
+        const SUFFICIENT_CAPACITY: u64 = 6400;
+        const INSUFFICIENT_CAPACITY: u64 = 6000;
+        const N: u64 = 1000;
+
+        let entries = (0..N).map(|i| (i, i));
+        let writer = MemoryWriter::new(SUFFICIENT_CAPACITY);
+        let builder = MassMapBuilder::default().with_bucket_count(1);
+        builder.build(&writer, entries).unwrap();
+
+        let map = MassMap::<u64, u64, _>::load(writer).unwrap();
+        for i in 0..N {
+            let value = map.get(&i).unwrap().unwrap();
+            assert_eq!(value, i);
+        }
+
+        let entries = (0..N).map(|i| (i, i));
+        let writer = MemoryWriter::new(INSUFFICIENT_CAPACITY);
+        let builder = MassMapBuilder::default().with_bucket_count(1);
+        builder.build(&writer, entries).unwrap_err();
     }
 }
