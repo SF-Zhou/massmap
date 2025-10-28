@@ -105,7 +105,7 @@ fn run_convert(args: ConvertArgs) -> Result<()> {
         .with_hash_seed(args.hash_seed)
         .with_bucket_count(args.bucket_count)
         .with_writer_buffer_size(args.buffer_size)
-        .build(writer, entries.iter())?;
+        .build(&writer, entries.iter())?;
 
     let json = serde_json::to_string_pretty(&info)
         .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;

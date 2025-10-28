@@ -196,7 +196,7 @@ mod tests {
             .with_bucket_count(8)
             .with_writer_buffer_size(8 << 20) // 8 MiB
             .with_field_names(true);
-        let info = builder.build(writer, entries.iter()).unwrap();
+        let info = builder.build(&writer, entries.iter()).unwrap();
         assert_eq!(info.entry_count, 5);
 
         let file = std::fs::File::open(&file).unwrap();
@@ -227,7 +227,7 @@ mod tests {
         let builder = MassMapBuilder::default()
             .with_bucket_count(N as u64)
             .with_writer_buffer_size(8 << 20); // 8 MiB
-        builder.build(writer, entries).unwrap();
+        builder.build(&writer, entries).unwrap();
 
         let file = std::fs::File::open(&file).unwrap();
         println!("massmap file size: {}", file.metadata().unwrap().len());
@@ -264,7 +264,7 @@ mod tests {
         let builder = MassMapBuilder::default()
             .with_bucket_count(1)
             .with_writer_buffer_size(8 << 20); // 8 MiB
-        let info = builder.build(writer, entries).unwrap();
+        let info = builder.build(&writer, entries).unwrap();
 
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -288,6 +288,13 @@ mod tests {
         }
 
         {
+            file.set_len(info.meta_offset + info.meta_length - 8)
+                .unwrap();
+            let file = std::fs::File::open(&path).unwrap();
+            MassMap::<u64, u64, _>::load(file).unwrap_err();
+        }
+
+        {
             file.write_all_at(b"invalid data", 0).unwrap();
             let file = std::fs::File::open(&path).unwrap();
             MassMap::<u64, u64, _>::load(file).unwrap_err();
@@ -304,6 +311,6 @@ mod tests {
             .with_writer_buffer_size(8 << 20)
             .with_bucket_size_limit(16);
         let entries = (0..N).map(|i| (i, i));
-        builder.build(writer, entries).unwrap_err();
+        builder.build(&writer, entries).unwrap_err();
     }
 }
