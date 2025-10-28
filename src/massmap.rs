@@ -250,18 +250,17 @@ where
             }
 
             // Read and deserialize the bucket
-            let result = self.map.reader.read_exact_at(
-                bucket.offset,
-                bucket.length as u64,
-                |data| {
-                    rmp_serde::from_slice(data).map_err(|e| {
-                        Error::new(
-                            ErrorKind::InvalidData,
-                            format!("Failed to deserialize bucket entries: {}", e),
-                        )
-                    })
-                },
-            );
+            let result =
+                self.map
+                    .reader
+                    .read_exact_at(bucket.offset, bucket.length as u64, |data| {
+                        rmp_serde::from_slice(data).map_err(|e| {
+                            Error::new(
+                                ErrorKind::InvalidData,
+                                format!("Failed to deserialize bucket entries: {}", e),
+                            )
+                        })
+                    });
 
             match result {
                 Ok(entries) => {
