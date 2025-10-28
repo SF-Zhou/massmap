@@ -24,8 +24,10 @@ pub trait MassMapReader {
     where
         F: Fn(&Q, &[u8]) -> Result<R>,
     {
-        let mut results = vec![];
-        for (key, offset, length) in iov {
+        let iter = iov.into_iter();
+        let (lower, _) = iter.size_hint();
+        let mut results = Vec::with_capacity(lower);
+        for (key, offset, length) in iter {
             if length == 0 {
                 results.push(f(key.borrow(), &[])?);
             } else {
