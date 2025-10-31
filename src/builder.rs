@@ -561,7 +561,7 @@ mod tests {
         let hash_config = MassMapHashConfig {
             name: "simplehash".to_string(),
             parameters: serde_json::json!({
-                "module": hash_modulo
+                "modulo": hash_modulo
             }),
         };
         let builder = MassMapBuilder::<SimpleHashLoader>::default()
