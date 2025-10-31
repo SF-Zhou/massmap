@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use foldhash::fast::FixedState;
 use massmap::{
     MassMap, MassMapBuilder, MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader,
+    MassMapMerger,
 };
 use serde_json::Value;
 use std::fs::File;
@@ -13,6 +14,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Info(args) => run_info(args),
         Command::Convert(args) => run_convert(args),
+        Command::Merge(args) => run_merge(args),
     }
 }
 
@@ -35,6 +37,8 @@ enum Command {
     Info(InfoArgs),
     /// Convert a JSON key-value file into a massmap binary file
     Convert(ConvertArgs),
+    /// Merge multiple massmap binary files into a single massmap binary file
+    Merge(MergeArgs),
 }
 
 #[derive(clap::Args)]
@@ -62,15 +66,30 @@ struct ConvertArgs {
     #[arg(short, long, value_name = "FILE")]
     output: PathBuf,
 
-    /// Optional override for the hash seed
+    /// Seed value for the hash function
     #[arg(long, value_name = "SEED", default_value_t = 0)]
     hash_seed: u64,
 
-    /// Optional override for bucket count
+    /// Number of buckets in the massmap
     #[arg(long, value_name = "COUNT", default_value_t = 1 << 16)]
     bucket_count: u64,
 
-    /// Optional override for writer buffer size in bytes
+    /// Buffer size in bytes for writing the massmap file
+    #[arg(long, value_name = "BYTES", default_value_t = 16 << 20)]
+    buffer_size: usize,
+}
+
+#[derive(clap::Args)]
+struct MergeArgs {
+    /// Path to the source JSON file containing key-value pairs
+    #[arg(short, long, value_name = "FILE")]
+    input: Vec<PathBuf>,
+
+    /// Path to the massmap binary file to produce
+    #[arg(short, long, value_name = "FILE")]
+    output: PathBuf,
+
+    /// Buffer size in bytes for writing the massmap file
     #[arg(long, value_name = "BYTES", default_value_t = 16 << 20)]
     buffer_size: usize,
 }
@@ -206,4 +225,26 @@ fn expect_string(value: Value, index: usize) -> Result<String> {
 
 fn invalid_json(message: String) -> Error {
     Error::new(ErrorKind::InvalidData, message)
+}
+
+fn run_merge(args: MergeArgs) -> Result<()> {
+    let maps = args
+        .input
+        .iter()
+        .map(|path| {
+            let file = File::open(path)?;
+            MassMap::<String, serde_json::Value, _, MassMapTolerableHashLoader>::load(file)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let writer = File::create(&args.output)?;
+    let info = MassMapMerger::default()
+        .with_writer_buffer_size(args.buffer_size)
+        .merge(&writer, maps)?;
+
+    let json = serde_json::to_string_pretty(&info)
+        .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
+    println!("{}", json);
+
+    Ok(())
 }

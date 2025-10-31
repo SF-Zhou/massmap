@@ -45,4 +45,4 @@ mod massmap;
 pub use massmap::{MassMap, MassMapIter};
 
 mod builder;
-pub use builder::MassMapBuilder;
+pub use builder::{MassMapBuilder, MassMapMerger};
