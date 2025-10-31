@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use massmap::{MassMap, MassMapBuilder, MassMapInfo};
+use massmap::{MassMap, MassMapBuilder};
 use serde_json::Value;
 use std::fs::File;
 use std::io::{BufReader, Error, ErrorKind, Result};
@@ -74,23 +74,10 @@ struct ConvertArgs {
 
 fn run_info(args: InfoArgs) -> Result<()> {
     let file = File::open(&args.input)?;
-    let file_length = file.metadata()?.len();
 
     let map = MassMap::<String, serde_json::Value, _>::load(file)?;
-    let meta = &map.meta;
 
-    let empty_buckets = meta.buckets.iter().filter(|b| b.count == 0).count();
-    let info = MassMapInfo {
-        file_length,
-        entry_count: meta.length,
-        bucket_count: meta.buckets.len(),
-        empty_buckets,
-        meta_offset: map.meta_offset,
-        meta_length: map.meta_length,
-        hash_seed: meta.hash_seed,
-    };
-
-    let json = serde_json::to_string_pretty(&info)
+    let json = serde_json::to_string_pretty(&map.info())
         .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
     println!("{}", json);
 
@@ -99,13 +86,12 @@ fn run_info(args: InfoArgs) -> Result<()> {
     }
 
     if let Some(bucket_index) = args.bucket {
-        if bucket_index as usize >= meta.buckets.len() {
+        if bucket_index >= map.meta.bucket_count {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 format!(
                     "Bucket index {} out of range >= {}",
-                    bucket_index,
-                    meta.buckets.len()
+                    bucket_index, map.meta.bucket_count
                 ),
             ));
         }

@@ -3,7 +3,9 @@ use std::io::{Error, ErrorKind, Result, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{hash::BuildHasher, io::BufWriter};
 
-use super::{MAGIC_NUMBER, MassMapBucket, MassMapInfo, MassMapMeta, MassMapWriter};
+use crate::meta::MassMapHeader;
+
+use super::{MassMapBucketMeta, MassMapInfo, MassMapMeta, MassMapWriter};
 
 /// Builder type for emitting massmap files from key-value iterators.
 ///
@@ -13,9 +15,9 @@ use super::{MAGIC_NUMBER, MassMapBucket, MassMapInfo, MassMapMeta, MassMapWriter
 ///
 /// Cloning is not required; each builder instance is consumed by a single call
 /// to [`build`](Self::build).
+#[derive(Debug, Clone)]
 pub struct MassMapBuilder {
     hash_seed: u64,
-    hash_state: FixedState,
     bucket_count: u64,
     writer_buffer_size: usize,
     field_names: bool,
@@ -26,7 +28,6 @@ impl Default for MassMapBuilder {
     fn default() -> Self {
         Self {
             hash_seed: 0,
-            hash_state: FixedState::with_seed(0),
             bucket_count: 1024,
             writer_buffer_size: 16 << 20, // 16 MiB
             field_names: false,
@@ -39,7 +40,6 @@ impl MassMapBuilder {
     /// Overrides the hash seed used to distribute keys across buckets.
     pub fn with_hash_seed(mut self, seed: u64) -> Self {
         self.hash_seed = seed;
-        self.hash_state = FixedState::with_seed(seed);
         self
     }
 
@@ -93,7 +93,7 @@ impl MassMapBuilder {
     /// let data = [("it", 1u32), ("works", 2u32)];
     /// let file = std::fs::File::create("examples/example.massmap")?;
     /// let info = MassMapBuilder::default().build(&file, data.iter())?;
-    /// assert_eq!(info.entry_count, 2);
+    /// assert_eq!(info.meta.entry_count, 2);
     /// # Ok(())
     /// # }
     /// ```
@@ -107,21 +107,20 @@ impl MassMapBuilder {
         K: serde::Serialize + Clone + std::hash::Hash + Eq,
         V: serde::Serialize + Clone,
     {
+        let hash_state = FixedState::with_seed(self.hash_seed);
+
         let mut buckets: Vec<Vec<(K, V)>> = vec![Vec::new(); self.bucket_count as usize];
-        let mut length: u64 = 0;
+        let mut entry_count: u64 = 0;
         for entry in entries {
             let (key, value) = entry.borrow();
-            let bucket_index = self.hash_state.hash_one(key) % self.bucket_count;
+            let bucket_index = hash_state.hash_one(key) % self.bucket_count;
             buckets[bucket_index as usize].push((key.clone(), value.clone()));
-            length += 1;
+            entry_count += 1;
         }
 
         const S: usize = std::mem::size_of::<u64>();
-        let mut meta = MassMapMeta {
-            hash_seed: self.hash_seed,
-            buckets: Vec::with_capacity(self.bucket_count as usize),
-            length,
-        };
+        let mut bucket_metas: Vec<MassMapBucketMeta> =
+            Vec::with_capacity(self.bucket_count as usize);
 
         let offset = AtomicU64::new(S as u64 * 3);
         let mut buf_writer = BufWriter::with_capacity(
@@ -133,7 +132,7 @@ impl MassMapBuilder {
         );
         for bucket in buckets {
             if bucket.is_empty() {
-                meta.buckets.push(MassMapBucket {
+                bucket_metas.push(MassMapBucketMeta {
                     offset: 0,
                     length: 0,
                     count: 0,
@@ -158,36 +157,34 @@ impl MassMapBuilder {
                 ));
             }
 
-            meta.buckets.push(MassMapBucket {
+            bucket_metas.push(MassMapBucketMeta {
                 offset: begin_offset,
                 length: (end_offset - begin_offset) as u32,
                 count: bucket.len() as u32,
             });
         }
 
+        let meta = MassMapMeta {
+            hash_seed: self.hash_seed,
+            entry_count,
+            bucket_count: self.bucket_count,
+            empty_buckets: bucket_metas.iter().filter(|b| b.count == 0).count() as u64,
+        };
+
         let meta_offset = offset.load(Ordering::Relaxed) + buf_writer.buffer().len() as u64;
-        rmp_serde::encode::write(&mut buf_writer, &meta)
+        rmp_serde::encode::write(&mut buf_writer, &(meta.clone(), bucket_metas))
             .map_err(|e| Error::other(format!("Fail to serialize meta: {}", e)))?;
         let finished_offset = offset.load(Ordering::Relaxed) + buf_writer.buffer().len() as u64;
         buf_writer.flush()?;
 
         let meta_length = finished_offset - meta_offset;
-        let mut data = [0u8; S * 3];
-        data[..S].copy_from_slice(&MAGIC_NUMBER.to_be_bytes());
-        data[S..S * 2].copy_from_slice(&meta_offset.to_be_bytes());
-        data[S * 2..].copy_from_slice(&meta_length.to_be_bytes());
-        writer.write_all_at(&data, 0)?;
-
-        let empty_buckets = meta.buckets.iter().filter(|b| b.count == 0).count();
-        Ok(MassMapInfo {
-            file_length: finished_offset,
-            entry_count: length,
-            bucket_count: self.bucket_count as usize,
-            empty_buckets,
+        let header = MassMapHeader {
             meta_offset,
             meta_length,
-            hash_seed: self.hash_seed,
-        })
+        };
+        writer.write_all_at(&header.serialize(), 0)?;
+
+        Ok(MassMapInfo { header, meta })
     }
 }
 
