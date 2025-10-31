@@ -29,6 +29,9 @@
 //! ```
 const MAGIC_NUMBER: u64 = u64::from_be_bytes(*b"MASSMAP!");
 
+mod hasher;
+pub use hasher::{MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader};
+
 mod meta;
 pub use meta::{MassMapBucketMeta, MassMapHeader, MassMapInfo, MassMapMeta};
 

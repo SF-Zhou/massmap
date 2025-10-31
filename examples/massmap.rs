@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand};
-use massmap::{MassMap, MassMapBuilder};
+use foldhash::fast::FixedState;
+use massmap::{
+    MassMap, MassMapBuilder, MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader,
+};
 use serde_json::Value;
 use std::fs::File;
 use std::io::{BufReader, Error, ErrorKind, Result};
@@ -70,6 +73,28 @@ struct ConvertArgs {
     /// Optional override for writer buffer size in bytes
     #[arg(long, value_name = "BYTES", default_value_t = 16 << 20)]
     buffer_size: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct MassMapTolerableHashLoader;
+
+impl MassMapHashLoader for MassMapTolerableHashLoader {
+    type BuildHasher = FixedState;
+
+    fn load(config: &MassMapHashConfig) -> Result<Self::BuildHasher> {
+        if config.name != MassMapDefaultHashLoader::NAME {
+            println!(
+                "Warning: Unsupported hash type: {}, defaulting to foldhash",
+                config.name
+            );
+        }
+        let seed = config
+            .parameters
+            .get("seed")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        Ok(FixedState::with_seed(seed))
+    }
 }
 
 fn run_info(args: InfoArgs) -> Result<()> {
