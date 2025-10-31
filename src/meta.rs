@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Error, ErrorKind, Result};
 
-use super::MAGIC_NUMBER;
+use crate::{MAGIC_NUMBER, MassMapHashConfig};
 
 /// Header serialized in raw bytes at the start of the massmap file.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
@@ -72,8 +72,8 @@ pub struct MassMapMeta {
     pub bucket_count: u64,
     /// Number of empty buckets.
     pub empty_buckets: u64,
-    /// Seed used when hashing keys into buckets.
-    pub hash_seed: u64,
+    /// Hash configuration.
+    pub hash_config: MassMapHashConfig,
 }
 
 /// Summary returned by [`MassMapBuilder::build`](crate::MassMapBuilder::build).

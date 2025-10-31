@@ -1,11 +1,11 @@
-use foldhash::fast::FixedState;
 use std::io::{Error, ErrorKind, Result, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{hash::BuildHasher, io::BufWriter};
 
-use crate::meta::MassMapHeader;
-
-use super::{MassMapBucketMeta, MassMapInfo, MassMapMeta, MassMapWriter};
+use crate::{
+    MassMapBucketMeta, MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader,
+    MassMapHeader, MassMapInfo, MassMapMeta, MassMapWriter,
+};
 
 /// Builder type for emitting massmap files from key-value iterators.
 ///
@@ -15,31 +15,46 @@ use super::{MassMapBucketMeta, MassMapInfo, MassMapMeta, MassMapWriter};
 ///
 /// Cloning is not required; each builder instance is consumed by a single call
 /// to [`build`](Self::build).
-#[derive(Debug, Clone)]
-pub struct MassMapBuilder {
-    hash_seed: u64,
+#[derive(Debug)]
+pub struct MassMapBuilder<H: MassMapHashLoader = MassMapDefaultHashLoader> {
+    hash_config: MassMapHashConfig,
     bucket_count: u64,
     writer_buffer_size: usize,
     field_names: bool,
     bucket_size_limit: u32,
+    phantom: std::marker::PhantomData<H>,
 }
 
 impl Default for MassMapBuilder {
     fn default() -> Self {
         Self {
-            hash_seed: 0,
+            hash_config: MassMapHashConfig::default(),
             bucket_count: 1024,
             writer_buffer_size: 16 << 20, // 16 MiB
             field_names: false,
             bucket_size_limit: u32::MAX,
+            phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl MassMapBuilder {
+impl<H: MassMapHashLoader> MassMapBuilder<H> {
+    /// Replaces the entire hash configuration used to distribute keys across buckets.
+    ///
+    /// This method allows advanced users to specify a custom [`MassMapHashConfig`]
+    /// with arbitrary parameters. For most use cases, [`with_hash_seed`](Self::with_hash_seed)
+    /// is sufficient to override just the hash seed parameter.
+    ///
+    /// # Parameters
+    /// - `config`: The hash configuration to use for this builder.
+    pub fn with_hash_config(mut self, config: MassMapHashConfig) -> Self {
+        self.hash_config = config;
+        self
+    }
+
     /// Overrides the hash seed used to distribute keys across buckets.
     pub fn with_hash_seed(mut self, seed: u64) -> Self {
-        self.hash_seed = seed;
+        self.hash_config.parameters["seed"] = serde_json::json!(seed);
         self
     }
 
@@ -107,13 +122,13 @@ impl MassMapBuilder {
         K: serde::Serialize + Clone + std::hash::Hash + Eq,
         V: serde::Serialize + Clone,
     {
-        let hash_state = FixedState::with_seed(self.hash_seed);
+        let build_hasher = H::load(&self.hash_config)?;
 
         let mut buckets: Vec<Vec<(K, V)>> = vec![Vec::new(); self.bucket_count as usize];
         let mut entry_count: u64 = 0;
         for entry in entries {
             let (key, value) = entry.borrow();
-            let bucket_index = hash_state.hash_one(key) % self.bucket_count;
+            let bucket_index = build_hasher.hash_one(key) % self.bucket_count;
             buckets[bucket_index as usize].push((key.clone(), value.clone()));
             entry_count += 1;
         }
@@ -165,7 +180,7 @@ impl MassMapBuilder {
         }
 
         let meta = MassMapMeta {
-            hash_seed: self.hash_seed,
+            hash_config: self.hash_config,
             entry_count,
             bucket_count: self.bucket_count,
             empty_buckets: bucket_metas.iter().filter(|b| b.count == 0).count() as u64,
@@ -296,7 +311,13 @@ mod tests {
 
         let entries = (0..N).map(|i| (i, i));
         let writer = MemoryWriter::new(SUFFICIENT_CAPACITY);
-        let builder = MassMapBuilder::default().with_bucket_count(1);
+        let hash_config = MassMapHashConfig {
+            name: "foldhash".to_string(),
+            parameters: serde_json::json!({ "seed": 42 }),
+        };
+        let builder = MassMapBuilder::default()
+            .with_bucket_count(1)
+            .with_hash_config(hash_config);
         builder.build(&writer, entries).unwrap();
 
         let map = MassMap::<u64, u64, _>::load(writer).unwrap();

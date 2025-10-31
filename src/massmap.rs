@@ -1,11 +1,13 @@
-use foldhash::fast::FixedState;
 use serde::Deserialize;
 use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash};
 use std::io::{Error, ErrorKind, Result};
 use std::marker::PhantomData;
 
-use super::{MassMapBucketMeta, MassMapHeader, MassMapInfo, MassMapMeta, MassMapReader};
+use crate::{
+    MassMapBucketMeta, MassMapDefaultHashLoader, MassMapHashLoader, MassMapHeader, MassMapInfo,
+    MassMapMeta, MassMapReader,
+};
 
 /// Immutable hash map backed by a serialized massmap file.
 ///
@@ -18,7 +20,7 @@ use super::{MassMapBucketMeta, MassMapHeader, MassMapInfo, MassMapMeta, MassMapR
 /// - `V`: value type stored in the map; must implement `serde::Deserialize` and `Clone`.
 /// - `R`: reader that satisfies [`MassMapReader`].
 #[derive(Debug)]
-pub struct MassMap<K, V, R: MassMapReader> {
+pub struct MassMap<K, V, R: MassMapReader, H: MassMapHashLoader = MassMapDefaultHashLoader> {
     /// Header serialized at the start of the massmap file.
     pub header: MassMapHeader,
     /// Metadata describing the layout and hashing strategy of the backing file.
@@ -26,14 +28,14 @@ pub struct MassMap<K, V, R: MassMapReader> {
     /// Metadata for each hash bucket in the map.
     bucket_metas: Vec<MassMapBucketMeta>,
     /// Hash state initialized with the stored seed.
-    hash_state: FixedState,
+    build_hasher: H::BuildHasher,
     /// Reader used to access the backing storage.
     reader: R,
     /// Phantom data to associate key and value types.
     phantom_data: PhantomData<(K, V)>,
 }
 
-impl<K, V, R: MassMapReader> MassMap<K, V, R>
+impl<K, V, R: MassMapReader, H: MassMapHashLoader> MassMap<K, V, R, H>
 where
     K: for<'de> Deserialize<'de> + Eq + Hash,
     V: for<'de> Deserialize<'de> + Clone,
@@ -62,12 +64,12 @@ where
                 })
             })?;
 
-        let hash_state = FixedState::with_seed(meta.hash_seed);
+        let build_hasher = H::load(&meta.hash_config)?;
         Ok(MassMap {
             header,
             meta,
             bucket_metas,
-            hash_state,
+            build_hasher,
             reader,
             phantom_data: PhantomData,
         })
@@ -182,7 +184,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub fn iter(&self) -> MassMapIter<'_, K, V, R> {
+    pub fn iter(&self) -> MassMapIter<'_, K, V, R, H> {
         MassMapIter {
             map: self,
             bucket_index: 0,
@@ -221,7 +223,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        (self.hash_state.hash_one(k) % (self.bucket_metas.len() as u64)) as usize
+        (self.build_hasher.hash_one(k) % (self.bucket_metas.len() as u64)) as usize
     }
 }
 
@@ -229,13 +231,13 @@ where
 ///
 /// This iterator traverses buckets sequentially, loading each bucket fully into
 /// memory before yielding its entries one by one.
-pub struct MassMapIter<'a, K, V, R: MassMapReader> {
-    map: &'a MassMap<K, V, R>,
+pub struct MassMapIter<'a, K, V, R: MassMapReader, H: MassMapHashLoader> {
+    map: &'a MassMap<K, V, R, H>,
     bucket_index: usize,
     current_entries: std::vec::IntoIter<(K, V)>,
 }
 
-impl<'a, K, V, R: MassMapReader> Iterator for MassMapIter<'a, K, V, R>
+impl<'a, K, V, R: MassMapReader, H: MassMapHashLoader> Iterator for MassMapIter<'a, K, V, R, H>
 where
     K: for<'de> Deserialize<'de> + Eq + Hash,
     V: for<'de> Deserialize<'de> + Clone,
@@ -302,7 +304,6 @@ mod tests {
         assert_eq!(info, map.info());
         assert_eq!(map.len(), 5);
         assert!(!map.is_empty());
-        assert_eq!(map.meta.hash_seed, 42);
         assert_eq!(map.bucket_metas.len(), 8);
         assert_eq!(map.bucket_metas.iter().map(|b| b.count).sum::<u32>(), 5);
         assert_eq!(map.get("apple").unwrap(), Some(1));
