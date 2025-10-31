@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::io::{Error, ErrorKind, Result};
+use std::{
+    io::{Error, ErrorKind, Result},
+    ops::Range,
+};
 
 use crate::{MAGIC_NUMBER, MassMapHashConfig};
 
@@ -70,8 +73,10 @@ pub struct MassMapMeta {
     pub entry_count: u64,
     /// Number of buckets.
     pub bucket_count: u64,
-    /// Number of empty buckets.
-    pub empty_buckets: u64,
+    /// Number of non-empty buckets.
+    pub occupied_bucket_count: u64,
+    /// Range of non-empty bucket indices.
+    pub occupied_bucket_range: Range<u64>,
     /// Hash configuration used to derive the [`BuildHasher`](std::hash::BuildHasher)
     /// when reopening the map.
     pub hash_config: MassMapHashConfig,

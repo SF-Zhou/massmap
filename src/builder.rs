@@ -1,10 +1,15 @@
 use std::io::{Error, ErrorKind, Result, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{hash::BuildHasher, io::BufWriter};
+use std::{
+    hash::{BuildHasher, Hash},
+    io::BufWriter,
+};
+
+use serde::Deserialize;
 
 use crate::{
-    MassMapBucketMeta, MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader,
-    MassMapHeader, MassMapInfo, MassMapMeta, MassMapWriter,
+    MassMap, MassMapBucketMeta, MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader,
+    MassMapHeader, MassMapInfo, MassMapMeta, MassMapReader, MassMapWriter,
 };
 
 /// Builder type for emitting massmap files from key-value iterators.
@@ -27,7 +32,7 @@ pub struct MassMapBuilder<H: MassMapHashLoader = MassMapDefaultHashLoader> {
     phantom: std::marker::PhantomData<H>,
 }
 
-impl Default for MassMapBuilder {
+impl<H: MassMapHashLoader> Default for MassMapBuilder<H> {
     fn default() -> Self {
         Self {
             hash_config: MassMapHashConfig::default(),
@@ -37,6 +42,14 @@ impl Default for MassMapBuilder {
             bucket_size_limit: u32::MAX,
             phantom: std::marker::PhantomData,
         }
+    }
+}
+
+impl MassMapBuilder {
+    /// Creates a new default massmap builder with default hash loader.
+    #[allow(clippy::should_implement_trait)]
+    pub fn default() -> Self {
+        <Self as Default>::default()
     }
 }
 
@@ -140,11 +153,10 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
             entry_count += 1;
         }
 
-        const S: usize = std::mem::size_of::<u64>();
         let mut bucket_metas: Vec<MassMapBucketMeta> =
             Vec::with_capacity(self.bucket_count as usize);
 
-        let offset = AtomicU64::new(S as u64 * 3);
+        let offset = AtomicU64::new(MassMapHeader::SIZE as u64);
         let mut buf_writer = BufWriter::with_capacity(
             self.writer_buffer_size,
             MassMapWriterWrapper {
@@ -152,7 +164,9 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
                 offset: &offset,
             },
         );
-        for bucket in buckets {
+        let mut occupied_bucket_count = 0;
+        let mut occupied_bucket_range = 0..0;
+        for (i, bucket) in buckets.into_iter().enumerate() {
             if bucket.is_empty() {
                 bucket_metas.push(MassMapBucketMeta {
                     offset: 0,
@@ -161,6 +175,12 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
                 });
                 continue;
             }
+
+            occupied_bucket_count += 1;
+            if occupied_bucket_range.is_empty() {
+                occupied_bucket_range.start = i as u64;
+            }
+            occupied_bucket_range.end = i as u64 + 1;
 
             let begin_offset = offset.load(Ordering::Relaxed) + buf_writer.buffer().len() as u64;
 
@@ -190,7 +210,8 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
             hash_config: self.hash_config,
             entry_count,
             bucket_count: self.bucket_count,
-            empty_buckets: bucket_metas.iter().filter(|b| b.count == 0).count() as u64,
+            occupied_bucket_count,
+            occupied_bucket_range,
         };
 
         let meta_offset = offset.load(Ordering::Relaxed) + buf_writer.buffer().len() as u64;
@@ -232,8 +253,150 @@ impl<'a, W: MassMapWriter> std::io::Write for MassMapWriterWrapper<'a, W> {
     }
 }
 
+#[derive(Debug)]
+pub struct MassMapMerger {
+    writer_buffer_size: usize,
+}
+
+impl Default for MassMapMerger {
+    fn default() -> Self {
+        Self {
+            writer_buffer_size: 16 << 20, // 16 MiB
+        }
+    }
+}
+
+impl MassMapMerger {
+    /// Adjusts the capacity of the buffered writer used while streaming data.
+    pub fn with_writer_buffer_size(mut self, size: usize) -> Self {
+        self.writer_buffer_size = size;
+        self
+    }
+}
+
+impl MassMapMerger {
+    pub fn merge<W, K, V, R: MassMapReader, H: MassMapHashLoader>(
+        self,
+        writer: &W,
+        mut maps: Vec<MassMap<K, V, R, H>>,
+    ) -> Result<MassMapInfo>
+    where
+        W: MassMapWriter,
+        K: for<'de> Deserialize<'de> + Eq + Hash,
+        V: for<'de> Deserialize<'de> + Clone,
+    {
+        if maps.is_empty() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "No massmaps provided for merging",
+            ));
+        }
+
+        maps.sort_by_key(|m| m.meta.occupied_bucket_range.start);
+
+        let mut entry_count = 0;
+        let mut bucket_metas =
+            vec![MassMapBucketMeta::default(); maps[0].meta.bucket_count as usize];
+        let hash_config = maps[0].meta.hash_config.clone();
+        let mut occupied_bucket_count = 0;
+        let mut occupied_bucket_range = 0..0;
+        let mut global_offset = 0u64;
+
+        for map in &maps {
+            if map.meta.hash_config != hash_config {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Incompatible hash configurations between massmaps",
+                ));
+            }
+            if map.meta.bucket_count != bucket_metas.len() as u64 {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Incompatible bucket counts between massmaps",
+                ));
+            }
+
+            if map.meta.entry_count == 0 {
+                continue;
+            }
+
+            occupied_bucket_count += map.meta.occupied_bucket_count;
+            if occupied_bucket_range.is_empty() {
+                occupied_bucket_range = map.meta.occupied_bucket_range.clone();
+            } else if occupied_bucket_range.end <= map.meta.occupied_bucket_range.start {
+                occupied_bucket_range.end = map.meta.occupied_bucket_range.end;
+            } else {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Overlapping occupied bucket ranges between massmaps",
+                ));
+            }
+
+            // update bucket metas.
+            for idx in map.meta.occupied_bucket_range.clone() {
+                let bucket_meta = &mut bucket_metas[idx as usize];
+                *bucket_meta = map.bucket_metas[idx as usize];
+                if bucket_meta.count > 0 {
+                    bucket_meta.offset += global_offset;
+                }
+            }
+            entry_count += map.meta.entry_count;
+
+            // copy buckets from reader to writer directly.
+            let mut current_offset = MassMapHeader::SIZE as u64;
+            let finished_offset = map.header.meta_offset;
+            while current_offset < finished_offset {
+                let chunk = std::cmp::min(
+                    finished_offset - current_offset,
+                    self.writer_buffer_size as u64,
+                );
+                map.reader.read_exact_at(current_offset, chunk, |data| {
+                    writer.write_all_at(data, global_offset + MassMapHeader::SIZE as u64)?;
+                    Ok(())
+                })?;
+                current_offset += chunk;
+                global_offset += chunk;
+            }
+        }
+
+        let meta = MassMapMeta {
+            hash_config,
+            entry_count,
+            bucket_count: bucket_metas.len() as u64,
+            occupied_bucket_count,
+            occupied_bucket_range,
+        };
+
+        let meta_offset = global_offset + MassMapHeader::SIZE as u64;
+        let offset = AtomicU64::new(meta_offset);
+        let mut buf_writer = BufWriter::with_capacity(
+            self.writer_buffer_size,
+            MassMapWriterWrapper {
+                inner: writer,
+                offset: &offset,
+            },
+        );
+
+        rmp_serde::encode::write(&mut buf_writer, &(meta.clone(), bucket_metas))
+            .map_err(|e| Error::other(format!("Fail to serialize meta: {}", e)))?;
+        buf_writer.flush()?;
+        let finished_offset = offset.load(Ordering::Relaxed);
+
+        let meta_length = finished_offset - meta_offset;
+        let header = MassMapHeader {
+            meta_offset,
+            meta_length,
+        };
+        writer.write_all_at(&header.serialize(), 0)?;
+
+        Ok(MassMapInfo { header, meta })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{fs::File, hash::Hasher, sync::Arc};
+
     use crate::*;
 
     #[derive(Debug)]
@@ -337,5 +500,174 @@ mod tests {
         let writer = MemoryWriter::new(INSUFFICIENT_CAPACITY);
         let builder = MassMapBuilder::default().with_bucket_count(1);
         builder.build(&writer, entries).unwrap_err();
+    }
+
+    pub struct SimpleHasher {
+        state: u64,
+        modulo: u64,
+    }
+
+    impl SimpleHasher {
+        pub fn new(modulo: u64) -> Self {
+            SimpleHasher { state: 0, modulo }
+        }
+    }
+
+    impl Hasher for SimpleHasher {
+        fn finish(&self) -> u64 {
+            self.state % self.modulo
+        }
+
+        fn write(&mut self, bytes: &[u8]) {
+            for &byte in bytes.iter().rev() {
+                self.state = self.state.wrapping_mul(256).wrapping_add(byte as u64);
+            }
+        }
+    }
+
+    struct SimpleBuildHasher {
+        modulo: u64,
+    }
+
+    impl std::hash::BuildHasher for SimpleBuildHasher {
+        type Hasher = SimpleHasher;
+
+        fn build_hasher(&self) -> Self::Hasher {
+            SimpleHasher::new(self.modulo)
+        }
+    }
+
+    struct SimpleHashLoader;
+
+    impl MassMapHashLoader for SimpleHashLoader {
+        type BuildHasher = SimpleBuildHasher;
+
+        fn load(config: &MassMapHashConfig) -> std::io::Result<Self::BuildHasher> {
+            let modulo = config
+                .parameters
+                .get("modulo")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10000);
+            Ok(SimpleBuildHasher { modulo })
+        }
+    }
+
+    fn create_simple_map(
+        entries: impl Iterator<Item = (u64, u64)>,
+        bucket_count: u64,
+        hash_modulo: u64,
+    ) -> MassMap<u64, u64, MemoryWriter, SimpleHashLoader> {
+        let writer = MemoryWriter::new(10 << 20); // 10 MiB
+        let hash_config = MassMapHashConfig {
+            name: "simplehash".to_string(),
+            parameters: serde_json::json!({
+                "modulo": hash_modulo
+            }),
+        };
+        let builder = MassMapBuilder::<SimpleHashLoader>::default()
+            .with_bucket_count(bucket_count)
+            .with_hash_config(hash_config);
+        builder.build(&writer, entries).unwrap();
+
+        MassMap::<u64, u64, _, SimpleHashLoader>::load(writer).unwrap()
+    }
+
+    #[test]
+    fn test_normal_merge() {
+        let dir = tempfile::tempdir().unwrap();
+
+        const M: u64 = 10000;
+        const N: u64 = 100_000;
+        const P: u64 = 10;
+
+        let mut threads = Vec::with_capacity(P as usize);
+        for i in 0..P {
+            threads.push(std::thread::spawn(move || {
+                let entries = (0..N).filter(|v| (v % M) / (M / P) == i).map(|v| (v, v));
+                let map = create_simple_map(entries, M, M);
+                assert_eq!(map.meta.occupied_bucket_count, M / P);
+                assert_eq!(map.meta.entry_count, N / P);
+                assert_eq!(map.meta.occupied_bucket_range.start, (M / P) * i);
+
+                for item in map.iter() {
+                    let (k, v) = item.unwrap();
+                    assert_eq!(k, v);
+                }
+                map
+            }));
+        }
+
+        let mut maps = threads
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect::<Vec<_>>();
+        maps.push(create_simple_map((0..0).map(|v| (v, v)), M, M));
+
+        let path = dir.path().join("merge.massmap");
+        let writer = std::fs::File::create(&path).unwrap();
+        MassMapMerger::default().merge(&writer, maps).unwrap();
+
+        let reader = std::fs::File::open(&path).unwrap();
+        let map = MassMap::<u64, u64, _, SimpleHashLoader>::load(reader).unwrap();
+        assert_eq!(map.len(), N);
+        let map = Arc::new(map);
+
+        let mut threads = Vec::with_capacity(P as usize);
+        for i in 0..P {
+            const CHUNK: u64 = N / P;
+            let range = CHUNK * i..CHUNK * (i + 1);
+            let map = map.clone();
+            threads.push(std::thread::spawn(move || {
+                for v in range {
+                    assert_eq!(map.get(&v).unwrap().unwrap(), v);
+                }
+            }));
+        }
+
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_invalid_merge() {
+        // 1. different hash config.
+        {
+            let map1 = create_simple_map((0..1000).map(|i| (i, i)), 1024, 10000);
+            let map2 = create_simple_map((1000..2000).map(|i| (i, i)), 1024, 20000);
+            let writer = MemoryWriter::new(10 << 20); // 10 MiB
+            MassMapMerger::default()
+                .with_writer_buffer_size(1 << 20)
+                .merge(&writer, vec![map1, map2])
+                .unwrap_err();
+        }
+
+        // 2. different bucket count.
+        {
+            let map1 = create_simple_map((0..1000).map(|i| (i, i)), 1024, 10000);
+            let map2 = create_simple_map((1000..2000).map(|i| (i, i)), 2048, 10000);
+            let writer = MemoryWriter::new(10 << 20); // 10 MiB
+            MassMapMerger::default()
+                .merge(&writer, vec![map1, map2])
+                .unwrap_err();
+        }
+
+        // 3. overlapping occupied bucket range.
+        {
+            let map1 = create_simple_map((0..1000).map(|i| (i, i)), 1024, 10000);
+            let map2 = create_simple_map((500..1500).map(|i| (i, i)), 1024, 10000);
+            let writer = MemoryWriter::new(10 << 20); // 10 MiB
+            MassMapMerger::default()
+                .merge(&writer, vec![map1, map2])
+                .unwrap_err();
+        }
+
+        // 4. empty input.
+        {
+            let writer = MemoryWriter::new(10 << 20); // 10 MiB
+            MassMapMerger::default()
+                .merge::<_, u64, u64, File, SimpleHashLoader>(&writer, vec![])
+                .unwrap_err();
+        }
     }
 }

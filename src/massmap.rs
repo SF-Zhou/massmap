@@ -28,11 +28,11 @@ pub struct MassMap<K, V, R: MassMapReader, H: MassMapHashLoader = MassMapDefault
     /// Metadata describing the layout and hashing strategy of the backing file.
     pub meta: MassMapMeta,
     /// Metadata for each hash bucket in the map.
-    bucket_metas: Vec<MassMapBucketMeta>,
+    pub(crate) bucket_metas: Vec<MassMapBucketMeta>,
     /// Hash state initialized with the stored seed.
     build_hasher: H::BuildHasher,
     /// Reader used to access the backing storage.
-    reader: R,
+    pub(crate) reader: R,
     /// Phantom data to associate key and value types.
     phantom_data: PhantomData<(K, V)>,
 }

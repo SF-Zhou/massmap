@@ -68,7 +68,7 @@ massmap convert -i examples/demo.json -o examples/demo.massmap --bucket-count 32
 #>   "file_length": 656,
 #>   "entry_count": 47,
 #>   "bucket_count": 32,
-#>   "empty_buckets": 5,
+#>   "occupied_bucket_count": 27,
 #>   "meta_offset": 486,
 #>   "meta_length": 170,
 #>   "hash_seed": 0
@@ -80,7 +80,7 @@ massmap info examples/demo.massmap -k 1999
 #>   "file_length": 656,
 #>   "entry_count": 47,
 #>   "bucket_count": 32,
-#>   "empty_buckets": 5,
+#>   "occupied_bucket_count": 27,
 #>   "meta_offset": 486,
 #>   "meta_length": 170,
 #>   "hash_seed": 0
