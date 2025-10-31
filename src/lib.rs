@@ -30,7 +30,7 @@
 const MAGIC_NUMBER: u64 = u64::from_be_bytes(*b"MASSMAP!");
 
 mod meta;
-pub use meta::{MassMapBucket, MassMapInfo, MassMapMeta};
+pub use meta::{MassMapBucketMeta, MassMapHeader, MassMapInfo, MassMapMeta};
 
 mod reader;
 pub use reader::MassMapReader;

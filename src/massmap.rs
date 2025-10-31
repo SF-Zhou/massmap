@@ -5,7 +5,7 @@ use std::hash::{BuildHasher, Hash};
 use std::io::{Error, ErrorKind, Result};
 use std::marker::PhantomData;
 
-use super::{MAGIC_NUMBER, MassMapMeta, MassMapReader};
+use super::{MassMapBucketMeta, MassMapHeader, MassMapInfo, MassMapMeta, MassMapReader};
 
 /// Immutable hash map backed by a serialized massmap file.
 ///
@@ -19,14 +19,17 @@ use super::{MAGIC_NUMBER, MassMapMeta, MassMapReader};
 /// - `R`: reader that satisfies [`MassMapReader`].
 #[derive(Debug)]
 pub struct MassMap<K, V, R: MassMapReader> {
+    /// Header serialized at the start of the massmap file.
+    pub header: MassMapHeader,
     /// Metadata describing the layout and hashing strategy of the backing file.
     pub meta: MassMapMeta,
-    /// Absolute offset within the reader at which the serialized metadata begins.
-    pub meta_offset: u64,
-    /// Length in bytes of the serialized metadata blob.
-    pub meta_length: u64,
+    /// Metadata for each hash bucket in the map.
+    bucket_metas: Vec<MassMapBucketMeta>,
+    /// Hash state initialized with the stored seed.
     hash_state: FixedState,
+    /// Reader used to access the backing storage.
     reader: R,
+    /// Phantom data to associate key and value types.
     phantom_data: PhantomData<(K, V)>,
 }
 
@@ -46,35 +49,24 @@ where
     /// Returns an error when the magic number is invalid, the metadata cannot be
     /// read in full, or the MessagePack payload fails to deserialize.
     pub fn load(reader: R) -> Result<Self> {
-        const S: usize = std::mem::size_of::<u64>();
-        let (magic_number, meta_offset, meta_length) =
-            reader.read_exact_at(0, S as u64 * 3, |data| {
-                let magic_number = u64::from_be_bytes(data[..S].try_into().unwrap());
-                let meta_offset = u64::from_be_bytes(data[S..S * 2].try_into().unwrap());
-                let meta_length = u64::from_be_bytes(data[S * 2..S * 3].try_into().unwrap());
-                Ok((magic_number, meta_offset, meta_length))
-            })?;
+        let header =
+            reader.read_exact_at(0, MassMapHeader::SIZE as u64, MassMapHeader::deserialize)?;
 
-        if magic_number != MAGIC_NUMBER {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                format!("Invalid magic number: {}", magic_number),
-            ));
-        }
-        let meta: MassMapMeta = reader.read_exact_at(meta_offset, meta_length, |data| {
-            rmp_serde::from_slice(data).map_err(|e| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    format!("Failed to deserialize MassMapMeta: {}", e),
-                )
-            })
-        })?;
+        let (meta, bucket_metas): (MassMapMeta, Vec<MassMapBucketMeta>) =
+            reader.read_exact_at(header.meta_offset, header.meta_length, |data| {
+                rmp_serde::from_slice(data).map_err(|e| {
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Failed to deserialize MassMapMeta: {}", e),
+                    )
+                })
+            })?;
 
         let hash_state = FixedState::with_seed(meta.hash_seed);
         Ok(MassMap {
+            header,
             meta,
-            meta_offset,
-            meta_length,
+            bucket_metas,
             hash_state,
             reader,
             phantom_data: PhantomData,
@@ -82,8 +74,21 @@ where
     }
 
     /// Returns the number of entries written into this map.
-    pub fn length(&self) -> u64 {
-        self.meta.length
+    pub fn len(&self) -> u64 {
+        self.meta.entry_count
+    }
+
+    /// Returns `true` if the map contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.meta.entry_count == 0
+    }
+
+    /// Returns information about the map's structure and contents.
+    pub fn info(&self) -> MassMapInfo {
+        MassMapInfo {
+            header: self.header.clone(),
+            meta: self.meta.clone(),
+        }
     }
 
     /// Attempts to deserialize the value associated with `k`.
@@ -129,7 +134,7 @@ where
     {
         let iov = keys.into_iter().map(|key| {
             let index = self.bucket_index(key.borrow());
-            let bucket = &self.meta.buckets[index];
+            let bucket = &self.bucket_metas[index];
             (key, bucket.offset, bucket.length as u64)
         });
 
@@ -194,7 +199,7 @@ where
     /// Returns an error if the reader fails to provide the bucket or if the
     /// serialized data cannot be deserialized into `(K, V)` pairs.
     pub fn get_bucket(&self, index: usize) -> Result<Vec<(K, V)>> {
-        let bucket = &self.meta.buckets[index];
+        let bucket = &self.bucket_metas[index];
         if bucket.count == 0 {
             return Ok(Vec::new());
         }
@@ -216,7 +221,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        (self.hash_state.hash_one(k) % (self.meta.buckets.len() as u64)) as usize
+        (self.hash_state.hash_one(k) % (self.bucket_metas.len() as u64)) as usize
     }
 }
 
@@ -245,7 +250,7 @@ where
             }
 
             // Move to the next bucket
-            if self.bucket_index >= self.map.meta.buckets.len() {
+            if self.bucket_index >= self.map.bucket_metas.len() {
                 return None;
             }
 
@@ -286,15 +291,20 @@ mod tests {
             .with_writer_buffer_size(8 << 20) // 8 MiB
             .with_field_names(true);
         let info = builder.build(&writer, entries.iter()).unwrap();
-        assert_eq!(info.entry_count, 5);
+        assert_eq!(info.meta.entry_count, 5);
 
         let file = std::fs::File::open(&file).unwrap();
-        assert_eq!(info.file_length, file.metadata().unwrap().len());
+        assert_eq!(
+            info.header.meta_length + info.header.meta_offset,
+            file.metadata().unwrap().len()
+        );
         let map = MassMap::<String, i32, _>::load(file).unwrap();
-        assert_eq!(map.length(), 5);
+        assert_eq!(info, map.info());
+        assert_eq!(map.len(), 5);
+        assert!(!map.is_empty());
         assert_eq!(map.meta.hash_seed, 42);
-        assert_eq!(map.meta.buckets.len(), 8);
-        assert_eq!(map.meta.buckets.iter().map(|b| b.count).sum::<u32>(), 5);
+        assert_eq!(map.bucket_metas.len(), 8);
+        assert_eq!(map.bucket_metas.iter().map(|b| b.count).sum::<u32>(), 5);
         assert_eq!(map.get("apple").unwrap(), Some(1));
         assert_eq!(map.get("banana").unwrap(), Some(2));
         assert_eq!(map.get("steins").unwrap(), None);
@@ -326,11 +336,10 @@ mod tests {
         println!("massmap file size: {}", file.metadata().unwrap().len());
 
         let map = MassMap::<u64, u64, _>::load(file).unwrap();
-        assert_eq!(map.length(), N as u64);
-        assert_eq!(map.meta.buckets.len(), N as usize);
+        assert_eq!(map.len(), N as u64);
+        assert_eq!(map.bucket_metas.len(), N as usize);
         assert_eq!(
-            map.meta
-                .buckets
+            map.bucket_metas
                 .iter()
                 .map(|b| b.count as usize)
                 .sum::<usize>(),
@@ -374,14 +383,14 @@ mod tests {
         }
 
         {
-            file.write_all_at(b"invalid data", info.meta_offset)
+            file.write_all_at(b"invalid data", info.header.meta_offset)
                 .unwrap();
             let file = std::fs::File::open(&path).unwrap();
             MassMap::<u64, u64, _>::load(file).unwrap_err();
         }
 
         {
-            file.set_len(info.meta_offset + info.meta_length - 8)
+            file.set_len(info.header.meta_offset + info.header.meta_length - 8)
                 .unwrap();
             let file = std::fs::File::open(&path).unwrap();
             MassMap::<u64, u64, _>::load(file).unwrap_err();
@@ -578,7 +587,7 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let map = MassMap::<u64, u64, _>::load(file).unwrap();
 
-        for bucket in &map.meta.buckets {
+        for bucket in &map.bucket_metas {
             if bucket.offset != 24 && bucket.count > 0 {
                 // Corrupt the first non-empty bucket
                 let file = std::fs::OpenOptions::new()
