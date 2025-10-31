@@ -65,32 +65,56 @@ cargo install massmap --examples
 # 2. convert a JSON file to massmap format
 massmap convert -i examples/demo.json -o examples/demo.massmap --bucket-count 32
 #> {
-#>   "file_length": 656,
-#>   "entry_count": 47,
-#>   "bucket_count": 32,
-#>   "occupied_bucket_count": 27,
-#>   "meta_offset": 486,
-#>   "meta_length": 170,
-#>   "hash_seed": 0
+#>   "header": {
+#>     "meta_offset": 486,
+#>     "meta_length": 192
+#>   },
+#>   "meta": {
+#>     "entry_count": 47,
+#>     "bucket_count": 32,
+#>     "occupied_bucket_count": 27,
+#>     "occupied_bucket_range": {
+#>       "start": 0,
+#>       "end": 32
+#>     },
+#>     "hash_config": {
+#>       "name": "foldhash",
+#>       "parameters": {
+#>         "seed": 0
+#>       }
+#>     }
+#>   }
 #> }
 
 # 3. query a key from the massmap file
 massmap info examples/demo.massmap -k 1999
 #> {
-#>   "file_length": 656,
-#>   "entry_count": 47,
-#>   "bucket_count": 32,
-#>   "occupied_bucket_count": 27,
-#>   "meta_offset": 486,
-#>   "meta_length": 170,
-#>   "hash_seed": 0
+#>   "header": {
+#>     "meta_offset": 486,
+#>     "meta_length": 192
+#>   },
+#>   "meta": {
+#>     "entry_count": 47,
+#>     "bucket_count": 32,
+#>     "occupied_bucket_count": 27,
+#>     "occupied_bucket_range": {
+#>       "start": 0,
+#>       "end": 32
+#>     },
+#>     "hash_config": {
+#>       "name": "foldhash",
+#>       "parameters": {
+#>         "seed": 0
+#>       }
+#>     }
+#>   }
 #> }
 #> 1999: Some(Number(7229))
 
 # 4. view the raw bytes of the massmap file
 hexdump -C examples/demo.massmap
 #> 00000000  4d 41 53 53 4d 41 50 21  00 00 00 00 00 00 01 e6  |MASSMAP!........|
-#> 00000010  00 00 00 00 00 00 00 aa  92 92 a4 31 39 39 34 cd  |...........1994.|
+#> 00000010  00 00 00 00 00 00 00 c0  92 92 a4 31 39 39 34 cd  |...........1994.|
 #> 00000020  0f f1 92 a4 32 30 32 30  ce 00 01 18 94 91 92 a4  |....2020........|
 #> 00000030  32 30 32 34 ce 00 01 76  05 92 92 a4 31 39 38 39  |2024...v....1989|
 #> 00000040  cd 06 00 92 a4 32 30 30  39 cd 66 44 92 92 a4 31  |.....2009.fD...1|
@@ -119,18 +143,20 @@ hexdump -C examples/demo.massmap
 #> 000001b0  e9 91 92 a4 31 39 38 33  cd 02 4c 91 92 a4 31 39  |....1983..L...19|
 #> 000001c0  38 32 cd 02 15 92 92 a4  31 39 39 30 cd 06 7f 92  |82......1990....|
 #> 000001d0  a4 32 30 31 39 ce 00 01  11 be 91 92 a4 32 30 32  |.2019........202|
-#> 000001e0  32 ce 00 01 4e c2 93 2f  00 dc 00 20 93 18 15 02  |2...N../... ....|
-#> 000001f0  93 2d 0c 01 93 39 13 02  93 4c 13 02 93 5f 25 04  |.-...9...L..._%.|
-#> 00000200  93 cc 84 0a 01 93 cc 8e  1c 03 93 cc aa 13 02 93  |................|
-#> 00000210  cc bd 0a 01 93 cc c7 0a  01 93 00 00 00 93 00 00  |................|
-#> 00000220  00 93 cc d1 15 02 93 cc  e6 13 02 93 00 00 00 93  |................|
-#> 00000230  cc f9 25 04 93 cd 01 1e  0a 01 93 cd 01 28 13 02  |..%..........(..|
-#> 00000240  93 cd 01 3b 0a 01 93 cd  01 45 13 02 93 00 00 00  |...;.....E......|
-#> 00000250  93 cd 01 58 13 02 93 00  00 00 93 cd 01 6b 0c 01  |...X.........k..|
-#> 00000260  93 cd 01 77 0a 01 93 cd  01 81 13 02 93 cd 01 94  |...w............|
-#> 00000270  13 02 93 cd 01 a7 0a 01  93 cd 01 b1 0a 01 93 cd  |................|
-#> 00000280  01 bb 0a 01 93 cd 01 c5  15 02 93 cd 01 da 0c 01  |................|
-#> 00000290
+#> 000001e0  32 ce 00 01 4e c2 92 95  2f 20 1b 92 00 20 92 a8  |2...N.../ ... ..|
+#> 000001f0  66 6f 6c 64 68 61 73 68  81 a4 73 65 65 64 00 dc  |foldhash..seed..|
+#> 00000200  00 20 93 18 15 02 93 2d  0c 01 93 39 13 02 93 4c  |. .....-...9...L|
+#> 00000210  13 02 93 5f 25 04 93 cc  84 0a 01 93 cc 8e 1c 03  |..._%...........|
+#> 00000220  93 cc aa 13 02 93 cc bd  0a 01 93 cc c7 0a 01 93  |................|
+#> 00000230  00 00 00 93 00 00 00 93  cc d1 15 02 93 cc e6 13  |................|
+#> 00000240  02 93 00 00 00 93 cc f9  25 04 93 cd 01 1e 0a 01  |........%.......|
+#> 00000250  93 cd 01 28 13 02 93 cd  01 3b 0a 01 93 cd 01 45  |...(.....;.....E|
+#> 00000260  13 02 93 00 00 00 93 cd  01 58 13 02 93 00 00 00  |.........X......|
+#> 00000270  93 cd 01 6b 0c 01 93 cd  01 77 0a 01 93 cd 01 81  |...k.....w......|
+#> 00000280  13 02 93 cd 01 94 13 02  93 cd 01 a7 0a 01 93 cd  |................|
+#> 00000290  01 b1 0a 01 93 cd 01 bb  0a 01 93 cd 01 c5 15 02  |................|
+#> 000002a0  93 cd 01 da 0c 01                                 |......|
+#> 000002a6
 ```
 
 ## Configuration
