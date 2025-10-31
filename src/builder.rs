@@ -39,6 +39,14 @@ impl Default for MassMapBuilder {
 }
 
 impl<H: MassMapHashLoader> MassMapBuilder<H> {
+    /// Replaces the entire hash configuration used to distribute keys across buckets.
+    ///
+    /// This method allows advanced users to specify a custom [`MassMapHashConfig`]
+    /// with arbitrary parameters. For most use cases, [`with_hash_seed`](Self::with_hash_seed)
+    /// is sufficient to override just the hash seed parameter.
+    ///
+    /// # Parameters
+    /// - `config`: The hash configuration to use for this builder.
     pub fn with_hash_config(mut self, config: MassMapHashConfig) -> Self {
         self.hash_config = config;
         self
