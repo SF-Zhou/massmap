@@ -3,7 +3,9 @@ use std::{borrow::Borrow, io::Result};
 /// Trait abstracting read access to massmap files.
 ///
 /// Implementations must support positional reads without mutating shared state.
-/// The trait is blanket-implemented for platform-specific `FileExt` handles.
+/// The trait is blanket-implemented for platform-specific `FileExt` handles,
+/// but can also wrap memory-mapped regions or networked block stores. Override
+/// [`batch_read_at`](Self::batch_read_at) to surface vectored IO capabilities.
 pub trait MassMapReader {
     /// Reads `length` bytes starting at `offset` and forwards them to `f`.
     ///

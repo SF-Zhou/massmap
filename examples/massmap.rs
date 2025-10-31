@@ -100,7 +100,7 @@ impl MassMapHashLoader for MassMapTolerableHashLoader {
 fn run_info(args: InfoArgs) -> Result<()> {
     let file = File::open(&args.input)?;
 
-    let map = MassMap::<String, serde_json::Value, _>::load(file)?;
+    let map = MassMap::<String, serde_json::Value, _, MassMapTolerableHashLoader>::load(file)?;
 
     let json = serde_json::to_string_pretty(&map.info())
         .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;

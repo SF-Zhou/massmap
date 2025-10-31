@@ -43,6 +43,7 @@ fn main() -> std::io::Result<()> {
     MassMapBuilder::default()
         .with_hash_seed(42)
         .with_bucket_count(1024)
+        .with_bucket_size_limit(16 << 10)
         .build(file, entries.iter())?;
 
     // Read-only lookup phase.
@@ -131,6 +132,15 @@ hexdump -C examples/demo.massmap
 #> 00000280  01 bb 0a 01 93 cd 01 c5  15 02 93 cd 01 da 0c 01  |................|
 #> 00000290
 ```
+
+## Configuration
+
+- `with_hash_seed(seed)`: choose deterministic sharding.
+- `with_bucket_count(count)`: trade memory for faster lookups.
+- `with_writer_buffer_size(bytes)`: tune streaming IO throughput.
+- `with_field_names(true)`: emit MessagePack maps with named fields for easier debugging.
+- `with_bucket_size_limit(bytes)`: guard against oversized buckets.
+- Replace the default [`MassMapHashLoader`](https://docs.rs/massmap/latest/massmap/trait.MassMapHashLoader.html) to plug in custom hashers.
 
 ## Readers and Writers
 
