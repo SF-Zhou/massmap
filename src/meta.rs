@@ -72,7 +72,8 @@ pub struct MassMapMeta {
     pub bucket_count: u64,
     /// Number of empty buckets.
     pub empty_buckets: u64,
-    /// Hash configuration.
+    /// Hash configuration used to derive the [`BuildHasher`](std::hash::BuildHasher)
+    /// when reopening the map.
     pub hash_config: MassMapHashConfig,
 }
 

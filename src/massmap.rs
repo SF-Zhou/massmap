@@ -19,6 +19,8 @@ use crate::{
 /// - `K`: key type stored in the map; must implement `serde::Deserialize`.
 /// - `V`: value type stored in the map; must implement `serde::Deserialize` and `Clone`.
 /// - `R`: reader that satisfies [`MassMapReader`].
+/// - `H`: hash loader used to reconstruct the [`BuildHasher`](BuildHasher) from
+///   the persisted [`MassMapHashConfig`](crate::MassMapHashConfig).
 #[derive(Debug)]
 pub struct MassMap<K, V, R: MassMapReader, H: MassMapHashLoader = MassMapDefaultHashLoader> {
     /// Header serialized at the start of the massmap file.
@@ -165,7 +167,8 @@ where
     ///
     /// The iterator reads each bucket sequentially from the backing storage,
     /// deserializes all entries in the bucket, and yields them one at a time.
-    /// Each bucket is fully loaded into memory before any of its entries are yielded.
+    /// Each bucket is fully loaded into memory before any of its entries are
+    /// yielded. Iteration stops immediately if a bucket fails to deserialize.
     ///
     /// # Examples
     ///
@@ -230,7 +233,8 @@ where
 /// Iterator over all entries in a [`MassMap`].
 ///
 /// This iterator traverses buckets sequentially, loading each bucket fully into
-/// memory before yielding its entries one by one.
+/// memory before yielding its entries one by one. Items are returned as
+/// `Result`s so that IO or deserialization failures propagate to the caller.
 pub struct MassMapIter<'a, K, V, R: MassMapReader, H: MassMapHashLoader> {
     map: &'a MassMap<K, V, R, H>,
     bucket_index: usize,

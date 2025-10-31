@@ -9,12 +9,14 @@ use crate::{
 
 /// Builder type for emitting massmap files from key-value iterators.
 ///
-/// The builder owns configuration such as hash seed, bucket sizing and IO
-/// buffering. Use [`build`](Self::build) to stream MessagePack-encoded buckets to
-/// a [`MassMapWriter`] sink (typically a file implementing `FileExt`).
+/// The builder owns configuration such as the hash seed, bucket sizing, IO
+/// buffering, field-name emission, and optional bucket size guards. Use
+/// [`build`](Self::build) to stream MessagePack-encoded buckets to a
+/// [`MassMapWriter`] sink (typically a file implementing `FileExt`).
 ///
-/// Cloning is not required; each builder instance is consumed by a single call
-/// to [`build`](Self::build).
+/// The loader type parameter `H` allows swapping in custom
+/// [`MassMapHashLoader`] implementations. Each builder instance is consumed by a
+/// single call to [`build`](Self::build).
 #[derive(Debug)]
 pub struct MassMapBuilder<H: MassMapHashLoader = MassMapDefaultHashLoader> {
     hash_config: MassMapHashConfig,
@@ -75,14 +77,18 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
 
     /// Controls whether serialized MessagePack maps include field names.
     ///
-    /// Enabling this makes the output human readable at the cost of slightly
-    /// larger files.
+    /// Enabling this makes the serialized buckets human readable at the cost
+    /// of slightly larger files and additional encoding work.
     pub fn with_field_names(mut self, value: bool) -> Self {
         self.field_names = value;
         self
     }
 
     /// Sets a hard cap on the number of bytes allowed per bucket payload.
+    ///
+    /// Buckets that exceed this limit cause [`build`](Self::build) to abort
+    /// with `ErrorKind::InvalidData`, which can be useful when targeting
+    /// systems with strict per-request IO ceilings.
     pub fn with_bucket_size_limit(mut self, limit: u32) -> Self {
         self.bucket_size_limit = limit;
         self
@@ -91,8 +97,9 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
     /// Consumes the builder and writes a massmap to `writer` from `entries`.
     ///
     /// The iterator is hashed according to the configured parameters, buckets
-    /// are serialized via `rmp-serde`, and a [`MassMapInfo`] summary is returned
-    /// on success.
+    /// are serialized via `rmp-serde`, and a [`MassMapInfo`] summary is
+    /// returned on success. Input ordering does not matter; keys are
+    /// automatically distributed across buckets.
     ///
     /// # Errors
     ///
