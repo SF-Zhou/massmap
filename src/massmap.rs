@@ -228,6 +228,21 @@ where
     {
         (self.build_hasher.hash_one(k) % (self.bucket_metas.len() as u64)) as usize
     }
+
+    pub fn cast<TK, TV>(self) -> MassMap<TK, TV, R, H>
+    where
+        TK: for<'de> Deserialize<'de> + Eq + Hash,
+        TV: for<'de> Deserialize<'de> + Clone,
+    {
+        MassMap {
+            header: self.header,
+            meta: self.meta,
+            bucket_metas: self.bucket_metas,
+            build_hasher: self.build_hasher,
+            reader: self.reader,
+            phantom_data: PhantomData,
+        }
+    }
 }
 
 /// Iterator over all entries in a [`MassMap`].
@@ -615,5 +630,31 @@ mod tests {
             }
         }
         assert!(found_error);
+    }
+
+    #[test]
+    fn test_massmap_cast() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("massmap_cast.bin");
+        let writer = std::fs::File::create(&file).unwrap();
+        let entries = vec![
+            ("apple", 1),
+            ("banana", 2),
+            ("cherry", 3),
+            ("date", 4),
+            ("elderberry", 5),
+        ];
+        let builder = MassMapBuilder::default()
+            .with_hash_seed(42)
+            .with_bucket_count(8);
+        builder.build(&writer, entries.iter()).unwrap();
+
+        let file = std::fs::File::open(&file).unwrap();
+        let map = MassMap::<u32, u32, _>::load(file).unwrap();
+
+        let casted_map: MassMap<String, i64, _, _> = map.cast();
+        assert_eq!(casted_map.get("apple").unwrap(), Some(1i64));
+        assert_eq!(casted_map.get("banana").unwrap(), Some(2i64));
+        assert_eq!(casted_map.get("steins").unwrap(), None);
     }
 }

@@ -212,6 +212,8 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
             bucket_count: self.bucket_count,
             occupied_bucket_count,
             occupied_bucket_range,
+            key_type: std::any::type_name::<K>().to_string(),
+            value_type: std::any::type_name::<V>().to_string(),
         };
 
         let meta_offset = offset.load(Ordering::Relaxed) + buf_writer.buffer().len() as u64;
@@ -365,6 +367,8 @@ impl MassMapMerger {
             bucket_count: bucket_metas.len() as u64,
             occupied_bucket_count,
             occupied_bucket_range,
+            key_type: std::any::type_name::<K>().to_string(),
+            value_type: std::any::type_name::<V>().to_string(),
         };
 
         let meta_offset = global_offset + MassMapHeader::SIZE as u64;
