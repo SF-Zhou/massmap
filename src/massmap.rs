@@ -22,7 +22,7 @@ use crate::{
 /// - `H`: hash loader used to reconstruct the [`BuildHasher`](BuildHasher) from
 ///   the persisted [`MassMapHashConfig`](crate::MassMapHashConfig).
 #[derive(Debug)]
-pub struct MassMap<K, V, R: MassMapReader, H: MassMapHashLoader = MassMapDefaultHashLoader> {
+pub struct MassMapInner<R: MassMapReader, H: MassMapHashLoader = MassMapDefaultHashLoader> {
     /// Header serialized at the start of the massmap file.
     pub header: MassMapHeader,
     /// Metadata describing the layout and hashing strategy of the backing file.
@@ -33,25 +33,24 @@ pub struct MassMap<K, V, R: MassMapReader, H: MassMapHashLoader = MassMapDefault
     build_hasher: H::BuildHasher,
     /// Reader used to access the backing storage.
     pub(crate) reader: R,
+}
+
+/// Typed view over a [`MassMapInner`].
+///
+/// This wrapper carries the key/value types at compile time while sharing the
+/// underlying storage and hashing configuration with other typed views.
+pub struct MassMap<K, V, R: MassMapReader, H: MassMapHashLoader = MassMapDefaultHashLoader> {
+    inner: MassMapInner<R, H>,
     /// Phantom data to associate key and value types.
     phantom_data: PhantomData<(K, V)>,
 }
 
-impl<K, V, R: MassMapReader, H: MassMapHashLoader> MassMap<K, V, R, H>
-where
-    K: for<'de> Deserialize<'de> + Eq + Hash,
-    V: for<'de> Deserialize<'de> + Clone,
-{
-    /// Constructs a massmap from a [`MassMapReader`] implementation.
+impl<R: MassMapReader, H: MassMapHashLoader> MassMapInner<R, H> {
+    /// Constructs an untyped massmap from a [`MassMapReader`] implementation.
     ///
     /// The method validates the leading header (magic number, metadata offset and
     /// length) and deserializes [`MassMapMeta`]. Any IO or deserialization errors
     /// are forwarded to the caller.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the magic number is invalid, the metadata cannot be
-    /// read in full, or the MessagePack payload fails to deserialize.
     pub fn load(reader: R) -> Result<Self> {
         let header =
             reader.read_exact_at(0, MassMapHeader::SIZE as u64, MassMapHeader::deserialize)?;
@@ -67,13 +66,12 @@ where
             })?;
 
         let build_hasher = H::load(&meta.hash_config)?;
-        Ok(MassMap {
+        Ok(MassMapInner {
             header,
             meta,
             bucket_metas,
             build_hasher,
             reader,
-            phantom_data: PhantomData,
         })
     }
 
@@ -93,6 +91,78 @@ where
             header: self.header.clone(),
             meta: self.meta.clone(),
         }
+    }
+
+    pub fn cast<K, V>(self) -> MassMap<K, V, R, H>
+    where
+        K: for<'de> Deserialize<'de> + Eq + Hash,
+        V: for<'de> Deserialize<'de> + Clone,
+    {
+        MassMap {
+            inner: self,
+            phantom_data: PhantomData,
+        }
+    }
+}
+
+impl<K, V, R: MassMapReader, H: MassMapHashLoader> MassMap<K, V, R, H>
+where
+    K: for<'de> Deserialize<'de> + Eq + Hash,
+    V: for<'de> Deserialize<'de> + Clone,
+{
+    /// Constructs a massmap from a [`MassMapReader`] implementation.
+    ///
+    /// The method validates the leading header (magic number, metadata offset and
+    pub fn load(reader: R) -> Result<Self> {
+        let inner = MassMapInner::load(reader)?;
+        Ok(MassMap {
+            inner,
+            phantom_data: PhantomData,
+        })
+    }
+
+    /// Returns the number of entries written into this map.
+    pub fn len(&self) -> u64 {
+        self.inner.len()
+    }
+
+    /// Returns `true` if the map contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of buckets in the underlying massmap.
+    ///
+    /// This is mainly intended for testing and diagnostics.
+    pub fn bucket_count(&self) -> usize {
+        self.inner.bucket_metas.len()
+    }
+
+    /// Exposes a reference to the underlying immutable metadata.
+    ///
+    /// This is primarily intended for internal crate use (e.g. merging maps).
+    pub(crate) fn meta(&self) -> &MassMapMeta {
+        &self.inner.meta
+    }
+
+    /// Exposes a reference to the underlying bucket metadata array.
+    pub(crate) fn bucket_metas(&self) -> &[MassMapBucketMeta] {
+        &self.inner.bucket_metas
+    }
+
+    /// Exposes the underlying header for internal crate use.
+    pub(crate) fn header(&self) -> &MassMapHeader {
+        &self.inner.header
+    }
+
+    /// Exposes a reference to the underlying reader for internal crate use.
+    pub(crate) fn reader(&self) -> &R {
+        &self.inner.reader
+    }
+
+    /// Returns information about the map's structure and contents.
+    pub fn info(&self) -> MassMapInfo {
+        self.inner.info()
     }
 
     /// Attempts to deserialize the value associated with `k`.
@@ -138,11 +208,11 @@ where
     {
         let iov = keys.into_iter().map(|key| {
             let index = self.bucket_index(key.borrow());
-            let bucket = &self.bucket_metas[index];
+            let bucket = &self.inner.bucket_metas[index];
             (key, bucket.offset, bucket.length as u64)
         });
 
-        self.reader.batch_read_at(iov, |expected, data| {
+        self.inner.reader.batch_read_at(iov, |expected, data| {
             if data.is_empty() {
                 return Ok(None);
             }
@@ -204,12 +274,13 @@ where
     /// Returns an error if the reader fails to provide the bucket or if the
     /// serialized data cannot be deserialized into `(K, V)` pairs.
     pub fn get_bucket(&self, index: usize) -> Result<Vec<(K, V)>> {
-        let bucket = &self.bucket_metas[index];
+        let bucket = &self.inner.bucket_metas[index];
         if bucket.count == 0 {
             return Ok(Vec::new());
         }
 
-        self.reader
+        self.inner
+            .reader
             .read_exact_at(bucket.offset, bucket.length as u64, |data| {
                 let entries: Vec<(K, V)> = rmp_serde::from_slice(data).map_err(|e| {
                     Error::new(
@@ -226,22 +297,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        (self.build_hasher.hash_one(k) % (self.bucket_metas.len() as u64)) as usize
-    }
-
-    pub fn cast<TK, TV>(self) -> MassMap<TK, TV, R, H>
-    where
-        TK: for<'de> Deserialize<'de> + Eq + Hash,
-        TV: for<'de> Deserialize<'de> + Clone,
-    {
-        MassMap {
-            header: self.header,
-            meta: self.meta,
-            bucket_metas: self.bucket_metas,
-            build_hasher: self.build_hasher,
-            reader: self.reader,
-            phantom_data: PhantomData,
-        }
+        (self.inner.build_hasher.hash_one(k) % (self.inner.bucket_metas.len() as u64)) as usize
     }
 }
 
@@ -271,7 +327,7 @@ where
             }
 
             // Move to the next bucket
-            if self.bucket_index >= self.map.bucket_metas.len() {
+            if self.bucket_index >= self.map.inner.bucket_metas.len() {
                 return None;
             }
 
@@ -323,8 +379,11 @@ mod tests {
         assert_eq!(info, map.info());
         assert_eq!(map.len(), 5);
         assert!(!map.is_empty());
-        assert_eq!(map.bucket_metas.len(), 8);
-        assert_eq!(map.bucket_metas.iter().map(|b| b.count).sum::<u32>(), 5);
+        assert_eq!(map.bucket_count(), 8);
+        assert_eq!(
+            map.inner.bucket_metas.iter().map(|b| b.count).sum::<u32>(),
+            5
+        );
         assert_eq!(map.get("apple").unwrap(), Some(1));
         assert_eq!(map.get("banana").unwrap(), Some(2));
         assert_eq!(map.get("steins").unwrap(), None);
@@ -357,9 +416,10 @@ mod tests {
 
         let map = MassMap::<u64, u64, _>::load(file).unwrap();
         assert_eq!(map.len(), N as u64);
-        assert_eq!(map.bucket_metas.len(), N as usize);
+        assert_eq!(map.bucket_count(), N as usize);
         assert_eq!(
-            map.bucket_metas
+            map.inner
+                .bucket_metas
                 .iter()
                 .map(|b| b.count as usize)
                 .sum::<usize>(),
@@ -406,25 +466,25 @@ mod tests {
             file.write_all_at(b"invalid data", info.header.meta_offset)
                 .unwrap();
             let file = std::fs::File::open(&path).unwrap();
-            MassMap::<u64, u64, _>::load(file).unwrap_err();
+            assert!(MassMap::<u64, u64, _>::load(file).is_err());
         }
 
         {
             file.set_len(info.header.meta_offset + info.header.meta_length - 8)
                 .unwrap();
             let file = std::fs::File::open(&path).unwrap();
-            MassMap::<u64, u64, _>::load(file).unwrap_err();
+            assert!(MassMap::<u64, u64, _>::load(file).is_err());
         }
 
         {
             file.write_all_at(b"invalid data", 0).unwrap();
             let file = std::fs::File::open(&path).unwrap();
-            MassMap::<u64, u64, _>::load(file).unwrap_err();
+            assert!(MassMap::<u64, u64, _>::load(file).is_err());
         }
 
         {
             let file = std::fs::File::create(&path).unwrap();
-            MassMap::<u64, u64, _>::load(file).unwrap_err();
+            assert!(MassMap::<u64, u64, _>::load(file).is_err());
         }
 
         let writer = std::fs::File::create(&path).unwrap();
@@ -607,7 +667,7 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let map = MassMap::<u64, u64, _>::load(file).unwrap();
 
-        for bucket in &map.bucket_metas {
+        for bucket in &map.inner.bucket_metas {
             if bucket.offset != 24 && bucket.count > 0 {
                 // Corrupt the first non-empty bucket
                 let file = std::fs::OpenOptions::new()
@@ -650,7 +710,7 @@ mod tests {
         builder.build(&writer, entries.iter()).unwrap();
 
         let file = std::fs::File::open(&file).unwrap();
-        let map = MassMap::<u32, u32, _>::load(file).unwrap();
+        let map = MassMapInner::<_>::load(file).unwrap();
 
         let casted_map: MassMap<String, i64, _, _> = map.cast();
         assert_eq!(casted_map.get("apple").unwrap(), Some(1i64));
