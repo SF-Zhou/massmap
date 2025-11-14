@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use foldhash::fast::FixedState;
 use massmap::{
     MassMap, MassMapBuilder, MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader,
-    MassMapMerger,
+    MassMapInner, MassMapMerger,
 };
 use serde_json::Value;
 use std::fs::File;
@@ -119,23 +119,25 @@ impl MassMapHashLoader for MassMapTolerableHashLoader {
 fn run_info(args: InfoArgs) -> Result<()> {
     let file = File::open(&args.input)?;
 
-    let map = MassMap::<String, serde_json::Value, _, MassMapTolerableHashLoader>::load(file)?;
+    let map = MassMapInner::<_, MassMapTolerableHashLoader>::load(file)?;
 
     let json = serde_json::to_string_pretty(&map.info())
         .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
     println!("{}", json);
 
+    /*
     if let Some(key) = args.key {
         println!("{}: {:?}", key, map.get(&key)?);
     }
 
     if let Some(bucket_index) = args.bucket {
-        if bucket_index >= map.meta.bucket_count {
+        if bucket_index as usize >= map.bucket_count() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 format!(
                     "Bucket index {} out of range >= {}",
-                    bucket_index, map.meta.bucket_count
+                    bucket_index,
+                    map.bucket_count()
                 ),
             ));
         }
@@ -144,6 +146,7 @@ fn run_info(args: InfoArgs) -> Result<()> {
             .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
         println!("Bucket {} entries:\n{}", bucket_index, json);
     }
+    */
 
     Ok(())
 }

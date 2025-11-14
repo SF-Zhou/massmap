@@ -212,6 +212,8 @@ impl<H: MassMapHashLoader> MassMapBuilder<H> {
             bucket_count: self.bucket_count,
             occupied_bucket_count,
             occupied_bucket_range,
+            key_type: std::any::type_name::<K>().to_string(),
+            value_type: std::any::type_name::<V>().to_string(),
         };
 
         let meta_offset = offset.load(Ordering::Relaxed) + buf_writer.buffer().len() as u64;
@@ -292,39 +294,39 @@ impl MassMapMerger {
             ));
         }
 
-        maps.sort_by_key(|m| m.meta.occupied_bucket_range.start);
+        maps.sort_by_key(|m| m.meta().occupied_bucket_range.start);
 
         let mut entry_count = 0;
         let mut bucket_metas =
-            vec![MassMapBucketMeta::default(); maps[0].meta.bucket_count as usize];
-        let hash_config = maps[0].meta.hash_config.clone();
+            vec![MassMapBucketMeta::default(); maps[0].meta().bucket_count as usize];
+        let hash_config = maps[0].meta().hash_config.clone();
         let mut occupied_bucket_count = 0;
         let mut occupied_bucket_range = 0..0;
         let mut global_offset = 0u64;
 
         for map in &maps {
-            if map.meta.hash_config != hash_config {
+            if map.meta().hash_config != hash_config {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     "Incompatible hash configurations between massmaps",
                 ));
             }
-            if map.meta.bucket_count != bucket_metas.len() as u64 {
+            if map.meta().bucket_count != bucket_metas.len() as u64 {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     "Incompatible bucket counts between massmaps",
                 ));
             }
 
-            if map.meta.entry_count == 0 {
+            if map.meta().entry_count == 0 {
                 continue;
             }
 
-            occupied_bucket_count += map.meta.occupied_bucket_count;
+            occupied_bucket_count += map.meta().occupied_bucket_count;
             if occupied_bucket_range.is_empty() {
-                occupied_bucket_range = map.meta.occupied_bucket_range.clone();
-            } else if occupied_bucket_range.end <= map.meta.occupied_bucket_range.start {
-                occupied_bucket_range.end = map.meta.occupied_bucket_range.end;
+                occupied_bucket_range = map.meta().occupied_bucket_range.clone();
+            } else if occupied_bucket_range.end <= map.meta().occupied_bucket_range.start {
+                occupied_bucket_range.end = map.meta().occupied_bucket_range.end;
             } else {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
@@ -333,24 +335,24 @@ impl MassMapMerger {
             }
 
             // update bucket metas.
-            for idx in map.meta.occupied_bucket_range.clone() {
+            for idx in map.meta().occupied_bucket_range.clone() {
                 let bucket_meta = &mut bucket_metas[idx as usize];
-                *bucket_meta = map.bucket_metas[idx as usize];
+                *bucket_meta = map.bucket_metas()[idx as usize];
                 if bucket_meta.count > 0 {
                     bucket_meta.offset += global_offset;
                 }
             }
-            entry_count += map.meta.entry_count;
+            entry_count += map.meta().entry_count;
 
             // copy buckets from reader to writer directly.
             let mut current_offset = MassMapHeader::SIZE as u64;
-            let finished_offset = map.header.meta_offset;
+            let finished_offset = map.header().meta_offset;
             while current_offset < finished_offset {
                 let chunk = std::cmp::min(
                     finished_offset - current_offset,
                     self.writer_buffer_size as u64,
                 );
-                map.reader.read_exact_at(current_offset, chunk, |data| {
+                map.reader().read_exact_at(current_offset, chunk, |data| {
                     writer.write_all_at(data, global_offset + MassMapHeader::SIZE as u64)?;
                     Ok(())
                 })?;
@@ -365,6 +367,8 @@ impl MassMapMerger {
             bucket_count: bucket_metas.len() as u64,
             occupied_bucket_count,
             occupied_bucket_range,
+            key_type: std::any::type_name::<K>().to_string(),
+            value_type: std::any::type_name::<V>().to_string(),
         };
 
         let meta_offset = global_offset + MassMapHeader::SIZE as u64;
@@ -585,9 +589,9 @@ mod tests {
             threads.push(std::thread::spawn(move || {
                 let entries = (0..N).filter(|v| (v % M) / (M / P) == i).map(|v| (v, v));
                 let map = create_simple_map(entries, M, M);
-                assert_eq!(map.meta.occupied_bucket_count, M / P);
-                assert_eq!(map.meta.entry_count, N / P);
-                assert_eq!(map.meta.occupied_bucket_range.start, (M / P) * i);
+                assert_eq!(map.meta().occupied_bucket_count, M / P);
+                assert_eq!(map.meta().entry_count, N / P);
+                assert_eq!(map.meta().occupied_bucket_range.start, (M / P) * i);
 
                 for item in map.iter() {
                     let (k, v) = item.unwrap();
