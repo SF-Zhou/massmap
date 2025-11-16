@@ -93,6 +93,7 @@ impl<R: MassMapReader, H: MassMapHashLoader> MassMapInner<R, H> {
         }
     }
 
+    /// Casts this untyped massmap into a typed view with the specified key and value types.
     pub fn cast<K, V>(self) -> MassMap<K, V, R, H>
     where
         K: for<'de> Deserialize<'de> + Eq + Hash,
@@ -113,6 +114,8 @@ where
     /// Constructs a massmap from a [`MassMapReader`] implementation.
     ///
     /// The method validates the leading header (magic number, metadata offset and
+    /// length) and deserializes [`MassMapMeta`]. Any IO or deserialization errors
+    /// are forwarded to the caller.
     pub fn load(reader: R) -> Result<Self> {
         let inner = MassMapInner::load(reader)?;
         Ok(MassMap {

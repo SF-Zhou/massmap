@@ -2,9 +2,11 @@ use clap::{Parser, Subcommand};
 use foldhash::fast::FixedState;
 use massmap::{
     MassMap, MassMapBuilder, MassMapDefaultHashLoader, MassMapHashConfig, MassMapHashLoader,
-    MassMapInner, MassMapMerger,
+    MassMapInner, MassMapMerger, MassMapReader,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufReader, Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
@@ -116,21 +118,20 @@ impl MassMapHashLoader for MassMapTolerableHashLoader {
     }
 }
 
-fn run_info(args: InfoArgs) -> Result<()> {
-    let file = File::open(&args.input)?;
-
-    let map = MassMapInner::<_, MassMapTolerableHashLoader>::load(file)?;
-
-    let json = serde_json::to_string_pretty(&map.info())
-        .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
-    println!("{}", json);
-
-    /*
-    if let Some(key) = args.key {
-        println!("{}: {:?}", key, map.get(&key)?);
+fn do_query<K, R>(
+    map: MassMap<K, serde_json::Value, R, MassMapTolerableHashLoader>,
+    key: Option<K>,
+    bucket: Option<u64>,
+) -> Result<()>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Display + std::hash::Hash + Eq,
+    R: MassMapReader,
+{
+    if let Some(key) = key {
+        println!("Get {}: {:?}", key, map.get(&key)?);
     }
 
-    if let Some(bucket_index) = args.bucket {
+    if let Some(bucket_index) = bucket {
         if bucket_index as usize >= map.bucket_count() {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -146,7 +147,56 @@ fn run_info(args: InfoArgs) -> Result<()> {
             .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
         println!("Bucket {} entries:\n{}", bucket_index, json);
     }
-    */
+
+    Ok(())
+}
+
+fn run_info(args: InfoArgs) -> Result<()> {
+    let file = File::open(&args.input)?;
+
+    let map = MassMapInner::<_, MassMapTolerableHashLoader>::load(file)?;
+
+    let json = serde_json::to_string_pretty(&map.info())
+        .map_err(|e| Error::other(format!("Failed to format JSON: {e}")))?;
+    println!("{}", json);
+
+    match map.meta.key_type.as_str() {
+        "u8" => do_query(
+            map.cast::<u8, _>(),
+            args.key.map(|x| x.parse().unwrap()),
+            args.bucket,
+        )?,
+        "u16" => do_query(
+            map.cast::<u16, _>(),
+            args.key.map(|x| x.parse().unwrap()),
+            args.bucket,
+        )?,
+        "u32" => do_query(
+            map.cast::<u32, _>(),
+            args.key.map(|x| x.parse().unwrap()),
+            args.bucket,
+        )?,
+        "u64" => do_query(
+            map.cast::<u64, _>(),
+            args.key.map(|x| x.parse().unwrap()),
+            args.bucket,
+        )?,
+        "u128" => do_query(
+            map.cast::<u128, _>(),
+            args.key.map(|x| x.parse().unwrap()),
+            args.bucket,
+        )?,
+        _ if map.meta.key_type == std::any::type_name::<String>() => {
+            do_query(map.cast::<String, _>(), args.key, args.bucket)?
+        }
+        _ => {
+            assert!(
+                args.key.is_none() && args.bucket.is_none(),
+                "Unsupported key type: {}",
+                map.meta.key_type
+            );
+        }
+    }
 
     Ok(())
 }
