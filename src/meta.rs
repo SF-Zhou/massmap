@@ -80,6 +80,10 @@ pub struct MassMapMeta {
     /// Hash configuration used to derive the [`BuildHasher`](std::hash::BuildHasher)
     /// when reopening the map.
     pub hash_config: MassMapHashConfig,
+    /// Key type name.
+    pub key_type: String,
+    /// Value type name.
+    pub value_type: String,
 }
 
 /// Summary returned by [`MassMapBuilder::build`](crate::MassMapBuilder::build).
