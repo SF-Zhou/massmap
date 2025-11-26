@@ -28,11 +28,11 @@ pub struct MassMapInner<R: MassMapReader, H: MassMapHashLoader = MassMapDefaultH
     /// Metadata describing the layout and hashing strategy of the backing file.
     pub meta: MassMapMeta,
     /// Metadata for each hash bucket in the map.
-    pub(crate) bucket_metas: Vec<MassMapBucketMeta>,
+    pub bucket_metas: Vec<MassMapBucketMeta>,
     /// Hash state initialized with the stored seed.
     build_hasher: H::BuildHasher,
     /// Reader used to access the backing storage.
-    pub(crate) reader: R,
+    pub reader: R,
 }
 
 /// Typed view over a [`MassMapInner`].
@@ -142,24 +142,22 @@ where
     }
 
     /// Exposes a reference to the underlying immutable metadata.
-    ///
-    /// This is primarily intended for internal crate use (e.g. merging maps).
-    pub(crate) fn meta(&self) -> &MassMapMeta {
+    pub fn meta(&self) -> &MassMapMeta {
         &self.inner.meta
     }
 
     /// Exposes a reference to the underlying bucket metadata array.
-    pub(crate) fn bucket_metas(&self) -> &[MassMapBucketMeta] {
+    pub fn bucket_metas(&self) -> &[MassMapBucketMeta] {
         &self.inner.bucket_metas
     }
 
     /// Exposes the underlying header for internal crate use.
-    pub(crate) fn header(&self) -> &MassMapHeader {
+    pub fn header(&self) -> &MassMapHeader {
         &self.inner.header
     }
 
     /// Exposes a reference to the underlying reader for internal crate use.
-    pub(crate) fn reader(&self) -> &R {
+    pub fn reader(&self) -> &R {
         &self.inner.reader
     }
 
@@ -295,7 +293,8 @@ where
             })
     }
 
-    fn bucket_index<Q>(&self, k: &Q) -> usize
+    /// Computes the bucket index for the given key.
+    pub fn bucket_index<Q>(&self, k: &Q) -> usize
     where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
