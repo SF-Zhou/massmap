@@ -151,12 +151,14 @@ where
         &self.inner.bucket_metas
     }
 
-    /// Exposes the underlying header for internal crate use.
+    /// Returns a reference to the underlying massmap header.
+    ///
+    /// This can be used to inspect metadata about the massmap file, such as version or configuration.
     pub fn header(&self) -> &MassMapHeader {
         &self.inner.header
     }
 
-    /// Exposes a reference to the underlying reader for internal crate use.
+    /// Returns a reference to the underlying reader used to access the backing storage.
     pub fn reader(&self) -> &R {
         &self.inner.reader
     }
